@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.29.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "talos"
+version = "0.1.0"
+description = "A learning-first AI coding agent built with LangGraph."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "langgraph>=1.2.1",
+    "langchain-core>=1.4.0",
+    "langchain-openai>=1.2.2",
+    "pydantic-settings>=2.14.1",
+    "python-dotenv>=1.2.2",
+    "typer>=0.25.1",
+]
+
+[project.scripts]
+talos = "talos.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/talos"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
