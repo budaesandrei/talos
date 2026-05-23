@@ -1,6 +1,7 @@
 import typer
+from langchain_core.messages import BaseMessage, HumanMessage
 
-from talos.runtime.runner import run_agent
+from talos.runtime.runner import get_message_text, run_agent, run_chat_turn
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -12,17 +13,21 @@ def run(prompt: str) -> None:
     typer.echo(output)
 
 
-@app.callback(invoke_without_command=True)
-def main(
-    ctx: typer.Context,
-    prompt: str | None = typer.Argument(None),
-) -> None:
-    if ctx.invoked_subcommand:
-        return
+@app.command()
+def chat() -> None:
+    """Start an interactive Talos chat session."""
+    typer.echo("Talos chat started. Type /exit to quit.")
 
-    if prompt is None:
-        typer.echo("Usage: talos 'hello'")
-        raise typer.Exit(code=1)
+    messages: list[BaseMessage] = []
 
-    output = run_agent(prompt)
-    typer.echo(output)
+    while True:
+        user_input = typer.prompt("you")
+
+        if user_input.strip() in {"/exit", "/quit"}:
+            typer.echo("bye")
+            raise typer.Exit()
+
+        messages = run_chat_turn(messages, user_input)
+        last_message = messages[-1]
+
+        typer.echo(f"talos: {get_message_text(last_message)}")

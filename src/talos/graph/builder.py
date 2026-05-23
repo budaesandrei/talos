@@ -1,5 +1,5 @@
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from talos.config import settings
@@ -16,10 +16,10 @@ def assistant_node(state: AgentState) -> dict[str, str]:
     response = llm.invoke(
         [
             SystemMessage(content=settings.system_prompt),
-            HumanMessage(content=state.user_input),
+            *state.messages,
         ]
     )
-    return {"output": response.content}
+    return {"messages": [response]}
 
 
 def build_graph():
