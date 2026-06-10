@@ -16,6 +16,7 @@ BUILTINS = {
     "/clear": "forget the conversation so far",
     "/tools": "list the agent's tools",
     "/memory": "show long-term memory",
+    "/mermaid": "open mermaid diagrams from the last reply in the browser",
     "/exit": "quit (also /quit)",
 }
 

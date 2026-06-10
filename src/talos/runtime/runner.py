@@ -34,6 +34,8 @@ from langchain_core.messages import (
 )
 from langgraph.errors import GraphRecursionError
 from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
@@ -43,6 +45,7 @@ from talos.context import build_system_prompt
 from talos.graph.builder import build_agent_graph
 from talos.llm import build_llm
 from talos.mcp import load_mcp_tools
+from talos.mermaid import extract_mermaid, open_in_browser
 from talos.permissions import PermissionGate
 from talos.sessions import (
     latest_session_id,
@@ -133,6 +136,7 @@ class Runtime:
         else:
             self.session_id = new_session_id()
             self.messages = []
+        self.last_mermaid: list[str] = []  # 🧜 filled after each reply
 
     # ── 🛡️ permission prompt (pauses the spinner) ───────────────────────
     def _ask_permission(self, tool_name: str, args: dict) -> str:
@@ -156,7 +160,22 @@ class Runtime:
     async def turn(self, user_input: str) -> str:
         self.messages.append(HumanMessage(content=user_input))
         collected: list[BaseMessage] = []
+        # 🎨 streaming state: with markdown on, we re-render the growing
+        # buffer through rich.Live (live markdown!); with it off, we print
+        # raw tokens. Either way the spinner dies on the first token.
+        buffer = ""
+        live: Live | None = None
         prefix_printed = False
+
+        def close_stream() -> None:
+            nonlocal live, buffer, prefix_printed
+            if live is not None:
+                live.stop()
+                live = None
+            if prefix_printed:
+                print()  # finish the raw streamed line
+            buffer = ""
+            prefix_printed = False
 
         self.status.set(f"{next(THINKING)}…")
         try:
@@ -173,14 +192,28 @@ class Runtime:
                         and meta.get("langgraph_node") == "agent"
                     ):
                         text = get_message_text(chunk)
-                        if text:
+                        if not text:
+                            continue
+                        self.status.stop()
+                        if settings.markdown:
+                            buffer += text
+                            if live is None:
+                                console.print("[bold magenta]talos ›[/]")
+                                live = Live(
+                                    console=console,
+                                    refresh_per_second=8,
+                                    vertical_overflow="visible",
+                                )
+                                live.start()
+                            live.update(Markdown(buffer))
+                        else:
                             if not prefix_printed:
-                                self.status.stop()
                                 console.print("[bold magenta]talos ›[/] ", end="")
                                 prefix_printed = True
                             print(text, end="", flush=True)
 
                 elif mode == "updates":
+                    close_stream()  # tool lines must not fight the Live region
                     for node, update in (payload or {}).items():
                         for msg in (update or {}).get("messages", []):
                             collected.append(msg)
@@ -188,7 +221,6 @@ class Runtime:
                         if node == "tools":
                             # back to the model for the next think step
                             self.status.set(f"{next(THINKING)}…")
-                            prefix_printed = False
 
         except GraphRecursionError:
             console.print(
@@ -204,17 +236,26 @@ class Runtime:
                 "TALOS_API_KEY in .env) then resume with: talos chat -r latest[/]"
             )
         finally:
+            close_stream()
             self.status.stop()
 
-        if prefix_printed:
-            print()  # finish the streamed line
         self.messages.extend(collected)
         save_session(self.session_id, self.messages)
 
+        final = ""
         for msg in reversed(collected):
             if isinstance(msg, AIMessage):
-                return get_message_text(msg)
-        return ""
+                final = get_message_text(msg)
+                break
+
+        # 🧜 mermaid can't render in a terminal — offer the browser instead.
+        self.last_mermaid = extract_mermaid(final)
+        if self.last_mermaid:
+            console.print(
+                f"[dim]🧜 {len(self.last_mermaid)} mermaid diagram(s) — "
+                "type /mermaid to open in your browser[/]"
+            )
+        return final
 
     # ── 🔧 render tool activity ──────────────────────────────────────────
     def _render_side_effects(self, msg: BaseMessage) -> None:
@@ -325,3 +366,9 @@ def _run_builtin(name: str, rt: Runtime) -> None:
         from talos.memory import load_memory
 
         console.print(load_memory() or "[dim](memory is empty)[/]")
+    elif name == "/mermaid":
+        if rt.last_mermaid:
+            path = open_in_browser(rt.last_mermaid)
+            console.print(f"[dim]🧜 opened {path}[/]")
+        else:
+            console.print("[dim]no mermaid blocks in the last reply[/]")

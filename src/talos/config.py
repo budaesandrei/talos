@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # GraphRecursionError. One think->act round trip costs 2 steps.
     max_iterations: int = 50
 
+    # 🎨 Render assistant responses as markdown in the terminal (headings,
+    # tables, syntax-highlighted code). Set false for raw text streaming.
+    markdown: bool = True
+
     # 🛡️ Skip all permission prompts (same idea as kiro's --yolo /
     # claude's --dangerously-skip-permissions). CLI flag overrides this.
     yolo: bool = False
