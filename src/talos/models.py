@@ -64,11 +64,26 @@ def lookup(model_id: str, db: dict | None = None) -> dict:
     return {}
 
 
-def parse_models(payload: dict, db: dict | None = None) -> list[ModelInfo]:
+def _normalize_payload(payload) -> list[dict]:
+    """/models responses come in three shapes in the wild:
+    {"data": [...]}, a bare [...] list (some compat layers, incl.
+    Anthropic's), and {"models": [...]} (Gemini-style). Items are usually
+    dicts but occasionally plain id strings. Normalize all of it."""
+    if isinstance(payload, list):
+        entries = payload
+    elif isinstance(payload, dict):
+        entries = payload.get("data") or payload.get("models") or []
+    else:
+        entries = []
+    return [{"id": e} if isinstance(e, str) else e
+            for e in entries if isinstance(e, (str, dict))]
+
+
+def parse_models(payload, db: dict | None = None) -> list[ModelInfo]:
     """Standard fields from /models + enrichment (OpenRouter > LiteLLM db)."""
     out = []
-    for entry in payload.get("data", []):
-        mid = entry.get("id", "")
+    for entry in _normalize_payload(payload):
+        mid = entry.get("id") or entry.get("name", "")
         if not mid:
             continue
         meta = lookup(mid, db)

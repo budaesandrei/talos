@@ -50,3 +50,17 @@ def test_estimate_cost(monkeypatch):
     cost = estimate_cost("claude-sonnet-4-5", 1000, 100)
     assert abs(cost - (1000 * 3e-6 + 100 * 15e-6)) < 1e-9
     assert estimate_cost("unknown-model", 10, 10) is None
+
+
+def test_bare_list_payload_is_tolerated():
+    """Anthropic's compat layer (and others) return a bare list."""
+    payload = [{"id": "claude-sonnet-4-5", "display_name": "Claude Sonnet 4.5"}]
+    (m,) = parse_models(payload, DB)
+    assert m.id == "claude-sonnet-4-5"
+    assert m.context == 200000  # still enriched from the db
+
+
+def test_string_ids_and_models_key_are_tolerated():
+    assert parse_models({"models": ["gpt-4o-mini"]}, DB)[0].vision is True
+    assert parse_models(["some-model"], DB)[0].id == "some-model"
+    assert parse_models({"weird": True}, DB) == []
