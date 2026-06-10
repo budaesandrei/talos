@@ -283,6 +283,12 @@ class Runtime:
         # the fuel gauge and the auto-compaction trigger.
         self.context_tokens = 0
         self.compactions = 0
+        try:
+            from talos.tools.recall_tool import set_session
+
+            set_session(self.session_id)
+        except Exception:
+            pass
 
     def _rebuild_graph(self) -> None:
         self.graph = build_agent_graph(
@@ -340,6 +346,29 @@ class Runtime:
         self._track_usage(msg)
         return get_message_text(msg)
 
+    async def _extract_topics(self, prompt: str, text: str) -> str:
+        from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
+
+        msg = await build_llm(self.model_name).ainvoke(
+            [SM(content=prompt), HM(content=text)]
+        )
+        self._track_usage(msg)
+        return get_message_text(msg)
+
+    async def _summ_community(self, label, topics, relations) -> str:
+        from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
+
+        body = "topics:\n" + "\n".join(topics)
+        if relations:
+            body += "\nrelations:\n" + "\n".join(relations)
+        msg = await build_llm(self.model_name).ainvoke([
+            SM(content="Summarize this topic cluster in 2-3 sentences for "
+                       "future recall. Be specific about decisions and facts."),
+            HM(content=body),
+        ])
+        self._track_usage(msg)
+        return get_message_text(msg)
+
     async def maybe_compact(self, force: bool = False) -> bool:
         """🗜️ Fold old turns into a summary when context fills up.
         Returns True if a compaction happened."""
@@ -354,11 +383,20 @@ class Runtime:
         )
         self.status.stop()
         if did:
-            # 🧠 hand the folded turns to long-term memory (M34) before dropping
+            # 🧠 fold the dropped turns into graph memory (M34) so they stay
+            # recallable. The summary message is new_messages[0].
             try:
-                from talos.graph_memory import ingest_compaction
+                from talos.graph_memory import ingest_async
 
-                ingest_compaction(self.session_id, self.messages, new_messages)
+                folded = next((str(m.content) for m in new_messages), "")
+                stats = await ingest_async(
+                    self.session_id, folded, self._extract_topics, self._summ_community
+                )
+                if stats["topics_added"]:
+                    console.print(
+                        f"[dim]🕸️ memory: +{stats['topics_added']} topics, "
+                        f"{stats['summary_calls']} community summaries[/]"
+                    )
             except Exception:
                 pass
             self.messages = new_messages
