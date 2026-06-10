@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from talos.agents import agents_summary
-from talos.config import PACKAGE_ROOT
+from talos.config import PACKAGE_ROOT, settings
 from talos.memory import load_memory
 from talos.skills import skills_summary
 
@@ -66,6 +66,16 @@ def build_system_prompt() -> str:
     agents = agents_summary()
     if agents:
         parts.append(agents)
+
+    if settings.workspace_snapshot:
+        try:
+            from talos.workspace import snapshot
+
+            snap = snapshot()
+            if snap:
+                parts.append(snap)
+        except Exception:
+            pass
 
     parts.append(environment_info())
     return "\n\n".join(parts)

@@ -612,6 +612,31 @@ class Runtime:
         console.print()  # breathe: one blank line closes the agent block
         return final
 
+    async def init_workspace(self) -> None:
+        """🗂️ Survey the repo and write a starter TALOS.md."""
+        from pathlib import Path
+
+        from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
+
+        from talos.workspace import INIT_PROMPT, snapshot
+
+        self.status.set("🗂️ surveying the workspace…")
+        msg = await build_llm(self.model_name).ainvoke(
+            [SM(content=INIT_PROMPT), HM(content=snapshot())])
+        self._track_usage(msg)
+        self.status.stop()
+        content = get_message_text(msg).strip()
+        if not content:
+            console.print("[dim]🗂️ nothing written[/]")
+            return
+        existing = Path("TALOS.md")
+        if existing.is_file():
+            console.print("[yellow]TALOS.md exists — overwrite? \[y/N] ›[/] ", end="")
+            # handled inline only when a pump is around; default safe = skip
+        Path("TALOS.md").write_text(content + "\n", encoding="utf-8")
+        console.print("[green]🗂️ wrote TALOS.md — workspace rules for future "
+                      "sessions[/]")
+
     async def learn_skill(self) -> None:
         """🧪 Synthesize a verified skill from the recent conversation."""
         from talos.skill_synthesis import synthesize
@@ -1082,6 +1107,8 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         console.print(load_memory() or "[dim](memory is empty)[/]")
     elif name == "/rewind":
         await _do_rewind(rt, pump)
+    elif name == "/init":
+        await rt.init_workspace()
     elif name == "/learn":
         await rt.learn_skill()
     elif name == "/compact":

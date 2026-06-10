@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # tables, syntax-highlighted code). Set false for raw text streaming.
     markdown: bool = True
 
+    # 🗂️ Inject a cheap workspace snapshot (tree, git, README head) into
+    # the system prompt so "what is this project?" is instantly answerable.
+    workspace_snapshot: bool = True
+
     # 🔭 Emit OpenTelemetry spans (GenAI semantic conventions). Off = zero
     # overhead. Set OTEL_EXPORTER_OTLP_ENDPOINT to ship to a collector.
     trace: bool = False

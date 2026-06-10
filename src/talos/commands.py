@@ -20,6 +20,7 @@ BUILTINS = {
     "/usage": "show token usage (session + all-time)",
     "/compact": "🗜️ fold older turns into a summary now",
     "/learn": "🧪 distill the last task into a reusable skill (verified)",
+    "/init": "🗂️ survey the project and write a starter TALOS.md",
     "/rewind": "⏪ jump back to a checkpoint (chat/files/both)",
     "/models": "list the provider's models, switch the active one",
     "/plan": "🗺️ plan before doing: /plan <task> (AI-DLC style)",
