@@ -18,6 +18,7 @@ BUILTINS = {
     "/memory": "show long-term memory",
     "/mermaid": "open mermaid diagrams from the last reply in the browser",
     "/usage": "show token usage (session + all-time)",
+    "/compact": "🗜️ fold older turns into a summary now",
     "/models": "list the provider's models, switch the active one",
     "/plan": "🗺️ plan before doing: /plan <task> (AI-DLC style)",
     "/exit": "quit (also /quit)",

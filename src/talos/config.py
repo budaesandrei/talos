@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # GraphRecursionError. One think->act round trip costs 2 steps.
     max_iterations: int = 50
 
+    # 🗜️ Auto-compaction: when context usage crosses this fraction of the
+    # model's max_input_tokens, fold older turns into a summary. Set to 0
+    # to disable. keep_recent = verbatim messages kept after a compaction.
+    compact_at: float = 0.70
+    keep_recent: int = 6
+
     # 🧠 Reasoning effort for thinking models (o-series, deepseek-r1,
     # claude with extended thinking via compat, …): low | medium | high.
     # Leave unset for non-reasoning models — providers reject unknown params.

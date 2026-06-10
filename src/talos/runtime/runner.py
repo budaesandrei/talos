@@ -46,6 +46,7 @@ from rich.text import Text
 
 from talos.banner import print_banner
 from talos.commands import dispatch, help_text
+from talos.compaction import SUMMARY_PROMPT, compact, fuel_gauge
 from talos.config import settings
 from talos.context import build_system_prompt
 from talos.graph.builder import build_agent_graph
@@ -277,6 +278,11 @@ class Runtime:
         self.usage = meta.get("usage") or {
             "input": 0, "output": 0, "total": 0, "turns": 0
         }
+        # 🗜️ exact current context size = the input_tokens of the last
+        # reply (the real number of tokens the model just read). Drives
+        # the fuel gauge and the auto-compaction trigger.
+        self.context_tokens = 0
+        self.compactions = 0
 
     def _rebuild_graph(self) -> None:
         self.graph = build_agent_graph(
@@ -296,21 +302,74 @@ class Runtime:
     def session_cost(self) -> float | None:
         return estimate_cost(self.model_name, self.usage["input"], self.usage["output"])
 
+    def context_limit(self) -> int | None:
+        from talos.models import provider_meta, lookup
+
+        meta = provider_meta(self.model_name) or lookup(self.model_name)
+        return meta.get("max_input_tokens")
+
     def _usage_suffix(self) -> str:
         """The 'how much have I spent' tail on the spinner line."""
         line = self.stats_line()
         return f" · {line}" if line else ""
 
     def stats_line(self) -> str:
-        """📊 'N tok · $X.XXX' — rendered at the right edge of the prompt."""
+        """📊 right-edge prompt stats: context fuel · session tokens · $."""
+        parts = []
+        gauge = fuel_gauge(self.context_tokens, self.context_limit())
+        if gauge:
+            parts.append(gauge)
         total = self.usage["total"]
-        if not total:
-            return ""
-        text = f"{total:,} tok"
-        cost = self.session_cost()
-        if cost is not None:
-            text += f" · ${cost:.3f}"
-        return text
+        if total:
+            text = f"{total:,} tok"
+            cost = self.session_cost()
+            if cost is not None:
+                text += f" · ${cost:.3f}"
+            parts.append(text)
+        return "  ·  ".join(parts)
+
+    async def _summarize(self, prior: str, transcript: str) -> str:
+        """One metered LLM call that produces the compaction digest."""
+        from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
+
+        msg = await build_llm(self.model_name).ainvoke([
+            SM(content=SUMMARY_PROMPT),
+            HM(content=(f"Earlier summary:\n{prior}\n\n" if prior else "")
+               + f"New turns to fold in:\n{transcript}"),
+        ])
+        self._track_usage(msg)
+        return get_message_text(msg)
+
+    async def maybe_compact(self, force: bool = False) -> bool:
+        """🗜️ Fold old turns into a summary when context fills up.
+        Returns True if a compaction happened."""
+        limit = self.context_limit()
+        threshold = (limit or 0) * settings.compact_at
+        over = limit and self.context_tokens >= threshold
+        if not (force or over) or settings.compact_at <= 0:
+            return False
+        self.status.set("🗜️ compacting context…")
+        new_messages, did = await compact(
+            self.messages, self._summarize, keep_recent=settings.keep_recent
+        )
+        self.status.stop()
+        if did:
+            # 🧠 hand the folded turns to long-term memory (M34) before dropping
+            try:
+                from talos.graph_memory import ingest_compaction
+
+                ingest_compaction(self.session_id, self.messages, new_messages)
+            except Exception:
+                pass
+            self.messages = new_messages
+            self.compactions += 1
+            self.context_tokens = 0  # reset estimate; next reply re-measures
+            save_session(self.session_id, self.messages)
+            console.print(
+                f"[dim]🗜️ compacted — folded older turns into a summary "
+                f"(compaction #{self.compactions})[/]"
+            )
+        return did
 
     def _header(self) -> str:
         """⚒ the agent's turn header — the visual user/agent split."""
@@ -351,6 +410,7 @@ class Runtime:
         self._turn_usage = {"input": 0, "output": 0, "total": 0}
         self.usage["turns"] += 1
         self.stop_flag.clear()
+        await self.maybe_compact()  # 🗜️ keep us under the context limit
         self._activity = ["received the task, thinking"]
         self.messages.append(HumanMessage(content=user_input))
         collected: list[BaseMessage] = []
@@ -442,6 +502,7 @@ class Runtime:
                         for msg in (update or {}).get("messages", []):
                             collected.append(msg)
                             self._track_usage(msg)
+                            self._measure_context(msg)
                             self._render_side_effects(msg)
                         if node == "tools":
                             # back to the model for the next think step
@@ -565,6 +626,13 @@ class Runtime:
         console.print(
             Panel(answer, title="🗣️ status", border_style="cyan", title_align="left")
         )
+
+    def _measure_context(self, msg: BaseMessage) -> None:
+        """The agent node's input_tokens IS the live context size."""
+        um = getattr(msg, "usage_metadata", None) or {}
+        it = um.get("input_tokens")
+        if it:
+            self.context_tokens = it
 
     def _track_usage(self, msg: BaseMessage) -> None:
         """📊 Each AIMessage carries normalized usage_metadata; sum it.
@@ -843,6 +911,10 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         from talos.memory import load_memory
 
         console.print(load_memory() or "[dim](memory is empty)[/]")
+    elif name == "/compact":
+        did = await rt.maybe_compact(force=True)
+        if not did:
+            console.print("[dim]nothing to compact yet[/]")
     elif name == "/usage":
         from rich.table import Table as RichTable
 
