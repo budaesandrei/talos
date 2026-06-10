@@ -15,6 +15,7 @@ stable instructions live in files, not in chat history.
 from datetime import datetime
 from pathlib import Path
 
+from talos.agents import agents_summary
 from talos.config import PACKAGE_ROOT
 from talos.memory import load_memory
 from talos.skills import skills_summary
@@ -58,6 +59,10 @@ def build_system_prompt() -> str:
     skills = skills_summary()
     if skills:
         parts.append(skills)
+
+    agents = agents_summary()
+    if agents:
+        parts.append(agents)
 
     parts.append(environment_info())
     return "\n\n".join(parts)

@@ -103,6 +103,24 @@ def skills() -> None:
 
 
 @app.command()
+def agents() -> None:
+    """🤖 List subagent definitions (.talos/agents/*.md)."""
+    from talos.agents import discover_agents
+
+    found = discover_agents()
+    if not found:
+        console.print("[dim]no subagents yet — create .talos/agents/<name>.md[/]")
+        return
+    table = Table(title="🤖 Subagents")
+    table.add_column("name", style="cyan")
+    table.add_column("description")
+    table.add_column("tools", style="dim")
+    for a in found:
+        table.add_row(a.name, a.description, ", ".join(a.tools) or "(default read-only)")
+    console.print(table)
+
+
+@app.command()
 def commands() -> None:
     """⌨️  List custom slash commands (.talos/commands/*.md)."""
     from talos.commands import custom_commands

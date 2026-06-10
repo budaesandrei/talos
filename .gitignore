@@ -26,3 +26,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Talos runtime state (keep agents/skills/commands tracked)
+.talos/sessions/
+.talos/memory.md
