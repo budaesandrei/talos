@@ -717,10 +717,11 @@ async def repl(
 
     print_banner(
         console,
-        model=model or settings.model,
+        model=rt.model_name,
         session_id=rt.session_id,
         yolo=yolo or settings.yolo,
         resumed=len(rt.messages) if resume else 0,
+        title=rt.title,
     )
 
     async def run_turn(text: str) -> None:
