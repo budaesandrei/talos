@@ -14,6 +14,7 @@ The compiled graph looks like this:
   requesting actions, to ``END`` once it produces a final answer.
 """
 
+import asyncio
 from collections.abc import Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -25,11 +26,18 @@ from talos.graph.state import AgentState
 from talos.permissions import PermissionGate
 
 
+STOP_NOTICE = (
+    "⚠️ USER REQUESTED STOP — do not start new actions. Wrap up now: "
+    "summarize what was done and what remains."
+)
+
+
 def build_agent_graph(
     llm: BaseChatModel,
     tools: Sequence[BaseTool],
     system_prompt: str,
     gate: PermissionGate | None = None,
+    stop_flag: "asyncio.Event | None" = None,
 ):
     # bind_tools() attaches the tools' JSON schemas to every request, which
     # is how the model knows what it *can* call.
@@ -50,7 +58,19 @@ def build_agent_graph(
 
         for call in last.tool_calls:
             tool = tools_by_name.get(call["name"])
-            allowed, reason = (True, "") if gate is None else gate.check(
+            # 🛑 graceful stop: between tool calls is the safe boundary —
+            # never mid-write. Remaining calls are refused; the model reads
+            # the notice and wraps up instead of acting.
+            if stop_flag is not None and stop_flag.is_set():
+                results.append(
+                    ToolMessage(
+                        content=STOP_NOTICE,
+                        tool_call_id=call["id"],
+                        name=call["name"],
+                    )
+                )
+                continue
+            allowed, reason = (True, "") if gate is None else await gate.check(
                 call["name"], call["args"]
             )
             if tool is None:

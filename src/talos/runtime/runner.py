@@ -22,14 +22,19 @@ UX details worth stealing:
 - Ctrl-C cancels the current turn, not the whole session
 """
 
+import asyncio
 import itertools
 import json
+import re
+import sys
+import threading
 
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
     HumanMessage,
+    SystemMessage,
     ToolMessage,
 )
 from langgraph.errors import GraphRecursionError
@@ -88,6 +93,67 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+class _StdinPump:
+    """⌨️→📬 One background thread owns stdin for the whole session.
+
+    Why: to accept input *while the agent is working*, someone must always
+    be reading stdin. Two readers would race for keystrokes, so this pump
+    is the only reader ever — every line lands in an asyncio queue, and
+    whoever currently 'owns' input (the prompt, an approval dialog, the
+    interjection handler) takes from there.
+    """
+
+    def __init__(self):
+        self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+        self.eof = False  # set once stdin closes (None sentinel seen)
+        self._loop = asyncio.get_running_loop()
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self) -> None:
+        try:
+            for line in sys.stdin:
+                asyncio.run_coroutine_threadsafe(
+                    self.queue.put(line.rstrip("\n")), self._loop
+                ).result()
+        except (ValueError, OSError):
+            pass  # stdin closed
+        asyncio.run_coroutine_threadsafe(self.queue.put(None), self._loop)
+
+
+# ── 🧭 interjection intent ───────────────────────────────────────────────
+_STOP_RE = re.compile(r"\b(stop|cancel|abort|halt|kill|enough)\b", re.I)
+_URGENT_RE = re.compile(r"(!{2,}|\b(now|immediately|right now|force)\b)", re.I)
+_STATUS_RE = re.compile(
+    r"\b(what (are|r) (you|u) doing|what's happening|status|progress|"
+    r"how('s| is) it going|how far|where are (you|we))\b", re.I
+)
+
+_CLASSIFIER_PROMPT = """You classify what a user wants when they type while an
+AI agent is busy with a task. Reply with EXACTLY one word:
+STATUS  - they ask what's happening / how it's going
+STOP    - they want the task stopped, calmly
+STOPNOW - they urgently demand an immediate halt
+QUEUE   - anything else: a note or question to handle after the task"""
+
+
+async def classify_intent(text: str) -> str:
+    """Heuristics first (fast, free); ambiguous lines go to the LLM."""
+    if _STOP_RE.search(text):
+        return "stopnow" if _URGENT_RE.search(text) else "stop"
+    if _STATUS_RE.search(text):
+        return "status"
+    try:
+        reply = await build_llm().ainvoke(
+            [SystemMessage(content=_CLASSIFIER_PROMPT), HumanMessage(content=text)]
+        )
+        word = get_message_text(reply).strip().upper()
+        return {"STATUS": "status", "STOP": "stop", "STOPNOW": "stopnow"}.get(
+            word, "queue"
+        )
+    except Exception:
+        return "queue"  # when in doubt, don't disturb the task
+
+
 class _Status:
     """Tiny wrapper around rich's spinner so we can pause it for input."""
 
@@ -117,6 +183,10 @@ class Runtime:
         extra_tools: list | None = None,
     ):
         self.status = _Status()
+        self.stop_flag = asyncio.Event()        # 🛑 graceful-stop signal
+        self.inbox: list[str] = []              # 📨 /btw-style queued notes
+        self._activity: list[str] = []          # 🗣️ narrator's source material
+        self._line_request: asyncio.Future | None = None  # approval waiting?
         gate = PermissionGate(
             approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
@@ -126,6 +196,7 @@ class Runtime:
             tools=get_tools() + list(extra_tools or []),  # built-ins + 🔌 MCP
             system_prompt=build_system_prompt(),
             gate=gate,
+            stop_flag=self.stop_flag,
         )
         # 💾 Either continue an old session or start a new one.
         if resume:
@@ -143,7 +214,10 @@ class Runtime:
         self.usage = {"input": 0, "output": 0, "total": 0, "turns": 0}
 
     # ── 🛡️ permission prompt (pauses the spinner) ───────────────────────
-    def _ask_permission(self, tool_name: str, args: dict) -> str:
+    async def _ask_permission(self, tool_name: str, args: dict) -> str:
+        """The pump owns stdin, so we can't call input() here. Instead we
+        park a Future; the REPL's interjection loop fulfils it with the
+        next line the user types."""
         self.status.stop()
         pretty = json.dumps(args, indent=2, ensure_ascii=False, default=str)
         if len(pretty) > 600:
@@ -156,7 +230,13 @@ class Runtime:
                 title_align="left",
             )
         )
-        answer = console.input("[yellow]allow? \\[y]es · \\[n]o · \\[a]lways ›[/] ")
+        console.print("[yellow]allow? \\[y]es · \\[n]o · \\[a]lways ›[/] ", end="")
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._line_request = fut
+        try:
+            answer = await fut
+        finally:
+            self._line_request = None
         self.status.set(f"⚙️  running {tool_name}…")
         return answer
 
@@ -164,6 +244,8 @@ class Runtime:
     async def turn(self, user_input: str) -> str:
         self._turn_usage = {"input": 0, "output": 0, "total": 0}
         self.usage["turns"] += 1
+        self.stop_flag.clear()
+        self._activity = ["received the task, thinking"]
         self.messages.append(HumanMessage(content=user_input))
         collected: list[BaseMessage] = []
         # 🎨 streaming state: with markdown on, we re-render the growing
@@ -243,11 +325,11 @@ class Runtime:
                 "TALOS_API_KEY in .env) then resume with: talos chat -r latest[/]"
             )
         finally:
+            # runs even on cancellation — history survives a forced stop
             close_stream()
             self.status.stop()
-
-        self.messages.extend(collected)
-        save_session(self.session_id, self.messages)
+            self.messages.extend(collected)
+            save_session(self.session_id, self.messages)
 
         final = ""
         for msg in reversed(collected):
@@ -271,6 +353,53 @@ class Runtime:
                 f"  ·  session {s['total']:,}[/]"
             )
         return final
+
+    # ── 🎙️ interjections: lines typed while the agent works ─────────────
+    async def interject(self, text: str, turn_task: "asyncio.Task") -> None:
+        if self._line_request is not None and not self._line_request.done():
+            self._line_request.set_result(text)  # it's an approval answer
+            return
+
+        intent = await classify_intent(text)
+        if intent == "stopnow":
+            console.print("[red]⛔ stopping immediately[/]")
+            turn_task.cancel()
+        elif intent == "stop":
+            console.print(
+                "[yellow]🛑 got it — finishing the current step safely, "
+                "then wrapping up[/]"
+            )
+            self.stop_flag.set()
+        elif intent == "status":
+            await self._narrate_status(text)
+        else:
+            self.inbox.append(text)
+            console.print("[dim]📨 noted — I'll get to it right after this[/]")
+
+    async def _narrate_status(self, question: str) -> None:
+        """🗣️ Side-channel answer that never touches the main task: a
+        separate LLM call over the turn's activity log. The main graph
+        keeps streaming; rich prints this above the live region."""
+        log = "\n".join(self._activity[-15:])
+        try:
+            reply = await build_llm().ainvoke(
+                [
+                    SystemMessage(
+                        content="You are the live narrator for a busy AI "
+                        "agent. Using its activity log, answer the user's "
+                        "question in 1–2 sentences. Do not do the task."
+                    ),
+                    HumanMessage(
+                        content=f"Activity log:\n{log}\n\nUser asks: {question}"
+                    ),
+                ]
+            )
+            answer = get_message_text(reply).strip() or "(still working — nothing to report yet)"
+        except Exception as exc:
+            answer = f"(narrator unavailable: {exc})"
+        console.print(
+            Panel(answer, title="🗣️ status", border_style="cyan", title_align="left")
+        )
 
     def _track_usage(self, msg: BaseMessage) -> None:
         """📊 Each AIMessage carries normalized usage_metadata; sum it.
@@ -299,6 +428,9 @@ class Runtime:
                 console.print(
                     f"[dim]{emoji} {call['name']}({_args_preview(call['args'])})[/]"
                 )
+                self._activity.append(
+                    f"called {call['name']}({_args_preview(call['args'], 80)})"
+                )
                 self.status.set(f"⚙️  running {call['name']}…")
         elif isinstance(msg, ToolMessage):
             lines = get_message_text(msg).strip().splitlines()
@@ -306,6 +438,7 @@ class Runtime:
             icon = "✗" if first.lower().startswith(("error", "permission denied")) else "✓"
             more = f" (+{len(lines) - 1} lines)" if len(lines) > 1 else ""
             console.print(f"[dim]   ↳ {icon} {first[:120]}{more}[/]")
+            self._activity.append(f"{msg.name} → {first[:100]}")
 
 
 async def _gather_mcp_tools() -> list:
@@ -335,8 +468,16 @@ async def repl(
     yolo: bool = False,
     resume: str | None = None,
 ) -> None:
-    """💬 Interactive mode."""
+    """💬 Interactive mode — with a twist: you can keep typing while the
+    agent works. Lines typed mid-task are classified and routed:
+
+      "what are you doing?"        → 🗣️ side-channel status answer
+      "stop, this isn't working"   → 🛑 graceful stop (safe boundary)
+      "STOP NOW!!"                 → ⛔ hard cancel of the turn
+      anything else                → 📨 queued, handled right after
+    """
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
+    pump = _StdinPump()  # the sole stdin reader from here on
 
     print_banner(
         console,
@@ -346,42 +487,83 @@ async def repl(
         resumed=len(rt.messages) if resume else 0,
     )
 
-    if initial_prompt:
-        console.print(f"[bold cyan]you ›[/] {initial_prompt}")
-        await rt.turn(initial_prompt)
-
-    while True:
+    async def run_turn(text: str) -> None:
+        """One turn, listening for interjections the whole time."""
+        turn_task = asyncio.create_task(rt.turn(text))
         try:
-            user_input = console.input("[bold cyan]you ›[/] ")
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]bye 👋[/]")
-            break
+            while not turn_task.done():
+                if pump.eof:
+                    # stdin is closed (piped input): nobody can interject —
+                    # just let the turn finish.
+                    await turn_task
+                    break
+                getter = asyncio.create_task(pump.queue.get())
+                await asyncio.wait(
+                    {turn_task, getter}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if getter.done():
+                    line = getter.result()
+                    if line is None:
+                        pump.eof = True  # remember; don't kill the turn
+                    elif line.strip():
+                        await rt.interject(line.strip(), turn_task)
+                else:
+                    getter.cancel()
+            await turn_task
+        except asyncio.CancelledError:
+            console.print("\n[yellow]⛔ stopped — session saved[/]")
+        except KeyboardInterrupt:
+            turn_task.cancel()
+            console.print("\n[yellow]⏹  turn interrupted[/]")
 
-        stripped = user_input.strip()
-        if not stripped:
-            continue
-
-        # ⌨️ slash commands are handled client-side, the model never sees them
+    async def handle_line(stripped: str) -> bool:
+        """Dispatch one user line. Returns False when the session should end."""
         action, payload = dispatch(stripped)
         if action == "builtin":
             if payload == "/exit":
                 console.print("[dim]bye 👋[/]")
-                break
+                return False
             _run_builtin(payload, rt)
-            continue
+            return True
         if action == "unknown":
             console.print(f"[red]unknown command {payload}[/] — try /help")
-            continue
-        prompt_text = payload  # "chat" → raw line, "prompt" → expanded template
+            return True
         if action == "prompt":
-            console.print(f"[dim]⌨️  expanded custom command[/]")
+            console.print("[dim]⌨️  expanded custom command[/]")
+        await run_turn(payload)
+        return True
 
+    if initial_prompt:
+        console.print(f"[bold cyan]you ›[/] {initial_prompt}")
+        await run_turn(initial_prompt)
+
+    while True:
+        # 📨 first, anything the user queued while the agent was busy
+        if rt.inbox:
+            note = rt.inbox.pop(0)
+            console.print(f"[bold cyan]you (queued) ›[/] {note}")
+            if not await handle_line(note):
+                break
+            continue
+
+        if pump.eof:
+            console.print("[dim]bye 👋[/]")
+            break
+
+        console.print("[bold cyan]you ›[/] ", end="")
         try:
-            await rt.turn(prompt_text)
+            line = await pump.queue.get()
         except KeyboardInterrupt:
-            rt.status.stop()
-            console.print("\n[yellow]⏹  turn interrupted[/]")
+            line = None
+        if line is None:
+            console.print("\n[dim]bye 👋[/]")
+            break
 
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not await handle_line(stripped):
+            break
 
 def _run_builtin(name: str, rt: Runtime) -> None:
     if name == "/help":

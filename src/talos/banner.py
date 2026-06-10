@@ -55,6 +55,6 @@ def print_banner(
         info += " · [bold red]⚡ yolo[/]"
     if resumed:
         info += f" · [dim]💾 resumed {resumed} messages[/]"
-    console.print(info)
-    console.print(f"  [dim]💡 {random.choice(TIPS)}[/]")
-    console.print(f"  [dim]/help for commands · /exit to leave[/]\n")
+    console.print(info, highlight=False)
+    console.print(f"  [dim]💡 {random.choice(TIPS)}[/]", highlight=False)
+    console.print(f"  [dim]/help for commands · /exit to leave[/]\n", highlight=False)

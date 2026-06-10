@@ -15,6 +15,7 @@ model itself never gets to bypass it — denial just becomes a ToolMessage
 the model can read and react to.
 """
 
+import inspect
 from collections.abc import Callable
 
 # Tools that can't mutate anything — always allowed.
@@ -31,8 +32,13 @@ class PermissionGate:
         self.yolo = yolo
         self.session_allowed: set[str] = set()
 
-    def check(self, tool_name: str, args: dict) -> tuple[bool, str]:
-        """Return (allowed, reason_if_denied)."""
+    async def check(self, tool_name: str, args: dict) -> tuple[bool, str]:
+        """Return (allowed, reason_if_denied).
+
+        Async because in the REPL the approver awaits the user's answer
+        through the shared input queue (see runtime/runner.py) — input
+        arriving while the agent works belongs to whoever asked first.
+        """
         if self.yolo:
             return True, ""
         if tool_name in READ_ONLY_TOOLS or tool_name in self.session_allowed:
@@ -44,7 +50,10 @@ class PermissionGate:
                 "interactive chat."
             )
 
-        answer = self.approver(tool_name, args).strip().lower()
+        answer = self.approver(tool_name, args)
+        if inspect.isawaitable(answer):  # sync approvers (tests) still work
+            answer = await answer
+        answer = answer.strip().lower()
         if answer == "a":
             self.session_allowed.add(tool_name)
             return True, ""

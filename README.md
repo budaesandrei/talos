@@ -16,6 +16,7 @@ Every feature category a modern agent has, implemented minimally:
 | 🎒 Skills (lazy knowledge) | `skills.py` | [06 — commands & skills](docs/06-commands-and-skills.md) |
 | 🤖🤖 Subagents | `agents.py` + `tools/task_tool.py` | [07 — subagents](docs/07-subagents.md) |
 | 🔌 MCP client | `mcp.py` | [08 — mcp](docs/08-mcp.md) |
+| 🎙️ Interjections (ask/stop mid-task) | `runtime/runner.py` | [09 — interjections](docs/09-interjections.md) |
 
 ## 🚀 Quickstart
 
@@ -92,6 +93,8 @@ git checkout <hash>      # time-travel to any milestone and poke around
 | M12 | subagents: context isolation + tool scoping |
 | M13 | MCP: pluggable external tools |
 | M14 | these docs |
+| M15–M16 | SSL toggle, crash-safe sessions, live markdown, /mermaid |
+| M17–M20 | usage tracking, pydantic models, 8-bit banner, interjections |
 
 Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
 

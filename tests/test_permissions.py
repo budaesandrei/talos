@@ -15,28 +15,34 @@ def boom(x: str) -> str:
     return f"executed {x}"
 
 
-def test_read_only_tools_pass_without_asking():
+async def test_read_only_tools_pass_without_asking():
     gate = PermissionGate(approver=None)
-    allowed, _ = gate.check("read_file", {})
+    allowed, _ = await gate.check("read_file", {})
     assert allowed
 
 
-def test_non_interactive_denies_mutations():
+async def test_non_interactive_denies_mutations():
     gate = PermissionGate(approver=None)
-    allowed, reason = gate.check("shell", {"command": "rm -rf /"})
+    allowed, reason = await gate.check("shell", {"command": "rm -rf /"})
     assert not allowed and "--yolo" in reason
 
 
-def test_yolo_allows_everything():
+async def test_yolo_allows_everything():
     gate = PermissionGate(approver=None, yolo=True)
-    assert gate.check("shell", {})[0]
+    assert (await gate.check("shell", {}))[0]
 
 
-def test_always_answer_caches_for_session():
+async def test_sync_and_async_approvers_both_work():
     answers = iter(["a"])
     gate = PermissionGate(approver=lambda n, a: next(answers))
-    assert gate.check("boom", {})[0]      # consumes the "a"
-    assert gate.check("boom", {})[0]      # cached — approver not called again
+    assert (await gate.check("boom", {}))[0]   # consumes the "a"
+    assert (await gate.check("boom", {}))[0]   # cached — not called again
+
+    async def async_approver(n, a):
+        return "y"
+
+    gate2 = PermissionGate(approver=async_approver)
+    assert (await gate2.check("boom", {}))[0]
 
 
 async def test_denied_tool_becomes_tool_message():
