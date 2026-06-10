@@ -102,22 +102,6 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-class _SlashCompleter:
-    """⌨️ TAB completion for slash commands — only at the start of a line."""
-
-    def get_completions(self, document, complete_event):
-        from prompt_toolkit.completion import Completion
-
-        from talos.commands import BUILTINS, custom_commands
-
-        text = document.text_before_cursor
-        if not text.startswith("/") or " " in text:
-            return
-        for cmd in sorted(set(BUILTINS) | set(custom_commands())):
-            if cmd.startswith(text):
-                yield Completion(cmd, start_position=-len(text))
-
-
 class _PromptPump:
     """⌨️→📬 prompt_toolkit edition of the stdin pump (real terminals).
 
@@ -136,14 +120,9 @@ class _PromptPump:
         self._task = asyncio.create_task(self._loop())
 
     async def _loop(self) -> None:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.completion import Completer
+        from talos.tui import build_session
 
-        # tiny adapter: our duck-typed completer → prompt_toolkit's ABC
-        completer = type(
-            "C", (Completer,), {"get_completions": _SlashCompleter.get_completions}
-        )()
-        session = PromptSession(completer=completer, complete_while_typing=True)
+        session = build_session()  # 🪟 inline command menu, no popup
         while True:
             try:
                 line = await session.prompt_async(self.prompt_text)
@@ -704,17 +683,10 @@ async def repl(
       anything else                → 📨 queued, handled right after
     """
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
-    pump = make_pump()  # the sole stdin reader from here on
 
-    if pump.fancy:
-        # output prints ABOVE the persistent bottom prompt
-        from prompt_toolkit.patch_stdout import patch_stdout
-
-        stdout_ctx = patch_stdout(raw=True)
-        stdout_ctx.__enter__()
-    else:
-        stdout_ctx = None
-
+    # 🕹️ banner FIRST — its Live animation needs the raw terminal. Only
+    # then start the prompt + patch_stdout, or every animation frame
+    # would be re-printed above the prompt as a separate block.
     print_banner(
         console,
         model=rt.model_name,
@@ -723,6 +695,16 @@ async def repl(
         resumed=len(rt.messages) if resume else 0,
         title=rt.title,
     )
+
+    pump = make_pump()  # the sole stdin reader from here on
+    if pump.fancy:
+        # output prints ABOVE the persistent bottom prompt
+        from prompt_toolkit.patch_stdout import patch_stdout
+
+        stdout_ctx = patch_stdout(raw=True)
+        stdout_ctx.__enter__()
+    else:
+        stdout_ctx = None
 
     async def run_turn(text: str) -> None:
         """One turn, listening for interjections the whole time."""

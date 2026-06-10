@@ -1,0 +1,150 @@
+"""🪟 The inline command menu — Kiro-style, no popup.
+
+prompt_toolkit's default completion menu is a floating popup box. Modern
+agent CLIs (kiro, claude code) instead render suggestions in a fixed
+window UNDER the input line: type ``/`` and the menu appears in place,
+↑/↓ move a highlight, the window never grows — it scrolls within its
+fixed height and shows a ``+N more`` tail that updates as you move.
+
+Three prompt_toolkit primitives make this work:
+
+- **bottom_toolbar** — a reserved strip under the prompt, re-rendered on
+  every keystroke; we draw the menu there ourselves
+- **KeyBindings + Condition filters** — ↑/↓/TAB/Enter act on the menu
+  only while it's visible; otherwise they keep their normal meaning
+  (history, submit)
+- **Style classes** — the 💗 selection bar
+
+The lesson worth keeping: you don't need a full-screen TUI framework for
+this — a prompt with a self-drawn toolbar gets you 90% of the elegance
+at 10% of the complexity.
+"""
+
+from prompt_toolkit.application import get_app
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style
+
+MENU_ROWS = 5  # the fixed window height — it never grows, it scrolls
+
+STYLE = Style.from_dict(
+    {
+        "bottom-toolbar": "noreverse",          # kill the default reverse video
+        "menu-row": "#9e9e9e",
+        "menu-sel": "bg:#ff5fd7 #1c1c1c bold",  # 💗 the pink bar
+        "menu-desc": "#6c6c6c",
+        "menu-desc-sel": "bg:#ff5fd7 #3a3a3a",
+        "menu-more": "#5f5f5f italic",
+    }
+)
+
+
+def _commands() -> list[tuple[str, str]]:
+    from talos.commands import BUILTINS, custom_commands
+
+    cmds = dict(BUILTINS)
+    for name in custom_commands():
+        cmds.setdefault(name, "custom command (.talos/commands)")
+    return sorted(cmds.items())
+
+
+class CommandMenu:
+    """Menu state (selection index) + rendering."""
+
+    def __init__(self):
+        self.index = 0
+
+    def matches(self, text: str) -> list[tuple[str, str]]:
+        if not text.startswith("/") or " " in text:
+            return []
+        return [(n, d) for n, d in _commands() if n.startswith(text)]
+
+    def active(self) -> bool:
+        try:
+            return bool(self.matches(get_app().current_buffer.text))
+        except Exception:
+            return False
+
+    def selected(self) -> str | None:
+        try:
+            m = self.matches(get_app().current_buffer.text)
+        except Exception:
+            return None
+        return m[self.index % len(m)][0] if m else None
+
+    def render(self, text: str):
+        m = self.matches(text)
+        if not m:
+            return ""
+        self.index %= len(m)
+        # scroll the fixed window so the selection stays visible
+        start = max(0, min(self.index - MENU_ROWS + 1, len(m) - MENU_ROWS))
+        visible = m[start : start + MENU_ROWS]
+        width = max(len(n) for n, _ in m) + 2
+
+        rows: list[tuple[str, str]] = []
+        for i, (name, desc) in enumerate(visible, start):
+            sel = i == self.index
+            rows.append(
+                ("class:menu-sel" if sel else "class:menu-row", f" {name:<{width}}")
+            )
+            rows.append(
+                ("class:menu-desc-sel" if sel else "class:menu-desc", f"{desc[:70]}\n")
+            )
+        below = len(m) - (start + len(visible))
+        if below > 0:
+            rows.append(("class:menu-more", f"  ↓ +{below} more"))
+        elif start > 0:
+            rows.append(("class:menu-more", f"  ↑ +{start} above"))
+        else:
+            rows.append(("class:menu-more", "  ↑↓ move · TAB/enter select"))
+        return FormattedText(rows)
+
+
+def build_session():
+    """A PromptSession with the inline menu wired in."""
+    from prompt_toolkit import PromptSession
+
+    menu = CommandMenu()
+    kb = KeyBindings()
+    menu_on = Condition(menu.active)
+
+    @kb.add("up", filter=menu_on)
+    def _up(event):
+        menu.index -= 1
+        event.app.invalidate()  # state changed but the buffer didn't —
+                                # without this the toolbar never repaints
+
+    @kb.add("down", filter=menu_on)
+    def _down(event):
+        menu.index += 1
+        event.app.invalidate()
+
+    def _accept(event):
+        sel = menu.selected()
+        if sel:
+            buffer = event.app.current_buffer
+            buffer.text = sel + " "
+            buffer.cursor_position = len(buffer.text)
+
+    kb.add("tab", filter=menu_on)(_accept)
+
+    # Enter = "take the highlighted command" while the menu is open…
+    exact = Condition(
+        lambda: get_app().current_buffer.text.strip() == (menu.selected() or "")
+    )
+
+    @kb.add("enter", filter=menu_on & ~exact)
+    def _enter(event):
+        _accept(event)
+    # …but an exact match falls through to normal Enter (submits the line).
+
+    session = PromptSession(
+        key_bindings=kb,
+        style=STYLE,
+        bottom_toolbar=lambda: menu.render(session.default_buffer.text),
+    )
+    # any edit resets the highlight to the top hit
+    session.default_buffer.on_text_changed += lambda _buf: setattr(menu, "index", 0)
+    return session

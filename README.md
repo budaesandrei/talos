@@ -17,6 +17,9 @@ Every feature category a modern agent has, implemented minimally:
 | 🤖🤖 Subagents | `agents.py` + `tools/task_tool.py` | [07 — subagents](docs/07-subagents.md) |
 | 🔌 MCP client | `mcp.py` | [08 — mcp](docs/08-mcp.md) |
 | 🎙️ Interjections (ask/stop mid-task) | `runtime/runner.py` | [09 — interjections](docs/09-interjections.md) |
+| 📇 Models, usage & cost | `models.py` | [10 — models & cost](docs/10-models-and-cost.md) |
+| 🗺️ Plan mode (AI-DLC) | `planning.py` | [11 — plan mode](docs/11-plan-mode.md) |
+| 🖥️ TUI (menu, streaming, banner) | `tui.py`, `runtime/` | [12 — terminal UI](docs/12-terminal-ui.md) |
 
 ## 🚀 Quickstart
 
@@ -95,6 +98,8 @@ git checkout <hash>      # time-travel to any milestone and poke around
 | M14 | these docs |
 | M15–M16 | SSL toggle, crash-safe sessions, live markdown, /mermaid |
 | M17–M20 | usage tracking, pydantic models, 8-bit banner, interjections |
+| M21–M25 | environment/shell awareness, session titles, /models + cost, /plan (AI-DLC), reasoning |
+| M26–M28 | prompt_toolkit input, animated banner, kiro-style inline command menu |
 
 Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
 
