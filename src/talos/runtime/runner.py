@@ -293,16 +293,18 @@ class Runtime:
         buffer = ""
         live: Live | None = None
         prefix_printed = False
+        reasoning_open = False
 
         def close_stream() -> None:
-            nonlocal live, buffer, prefix_printed
+            nonlocal live, buffer, prefix_printed, reasoning_open
             if live is not None:
                 live.stop()
                 live = None
-            if prefix_printed:
-                print()  # finish the raw streamed line
+            if prefix_printed or reasoning_open:
+                print()  # finish the streamed line
             buffer = ""
             prefix_printed = False
+            reasoning_open = False
 
         self.status.set(f"{next(THINKING)}…{self._usage_suffix()}")
         try:
@@ -318,9 +320,29 @@ class Runtime:
                         isinstance(chunk, AIMessageChunk)
                         and meta.get("langgraph_node") == "agent"
                     ):
+                        # 🧠 thinking models stream their reasoning in a
+                        # separate channel (additional_kwargs.reasoning_content
+                        # — a de-facto convention, not part of the OpenAI
+                        # spec). Render it dim so thought ≠ answer.
+                        thought = (chunk.additional_kwargs or {}).get(
+                            "reasoning_content"
+                        ) or ""
+                        if thought:
+                            self.status.stop()
+                            if not reasoning_open:
+                                console.print("[dim italic]🧠 thinking[/]")
+                                reasoning_open = True
+                            console.print(
+                                thought, end="", style="dim",
+                                highlight=False, markup=False,
+                            )
+                            continue
                         text = get_message_text(chunk)
                         if not text:
                             continue
+                        if reasoning_open:
+                            print()  # close the reasoning block
+                            reasoning_open = False
                         self.status.stop()
                         if settings.markdown:
                             buffer += text

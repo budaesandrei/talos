@@ -116,3 +116,13 @@ async def test_session_gets_llm_title_and_usage_persists(tmp_path, monkeypatch):
     assert meta["usage"]["total"] == 15
     assert list_sessions()[0]["title"] == "rename files project"
     assert all_time_usage()["total"] == 15
+
+
+def test_reasoning_effort_only_sent_when_configured(monkeypatch):
+    from talos import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod.settings, "reasoning_effort", None)
+    assert llm_mod.build_llm().reasoning_effort is None
+
+    monkeypatch.setattr(llm_mod.settings, "reasoning_effort", "high")
+    assert llm_mod.build_llm().reasoning_effort == "high"

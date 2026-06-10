@@ -33,6 +33,10 @@ def build_llm(model: str | None = None) -> ChatOpenAI:
         "http_async_client": httpx.AsyncClient(verify=settings.verify_ssl),
     }
 
+    if settings.reasoning_effort:
+        # 🧠 only sent when configured: non-reasoning models would 400
+        extra["reasoning_effort"] = settings.reasoning_effort
+
     return ChatOpenAI(
         model=model or settings.model,
         api_key=settings.api_key or "not-set",  # local servers ignore it

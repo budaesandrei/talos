@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # GraphRecursionError. One think->act round trip costs 2 steps.
     max_iterations: int = 50
 
+    # 🧠 Reasoning effort for thinking models (o-series, deepseek-r1,
+    # claude with extended thinking via compat, …): low | medium | high.
+    # Leave unset for non-reasoning models — providers reject unknown params.
+    reasoning_effort: str | None = None
+
     # 🖥️ Which shell the `shell` tool uses: auto | powershell | pwsh |
     # cmd | bash | zsh | sh.  auto → PowerShell on Windows, $SHELL elsewhere.
     shell: str = "auto"
