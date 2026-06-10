@@ -1,41 +1,60 @@
+"""🖥️ Talos CLI — the front door.
+
+Built with Typer: each ``@app.command()`` function becomes a subcommand.
+
+    talos chat                      💬 interactive REPL
+    talos chat -n "do the thing"    ⚡ one-shot (like kiro --no-interactive)
+    talos run "do the thing"        ⚡ same as above, shorter
+    talos config                    ⚙️  show effective settings
+    talos version                   🏷️  print version
+"""
+
+import asyncio
+from typing import Optional
+
 import typer
-from langchain_core.messages import BaseMessage
 from rich.console import Console
 from rich.table import Table
 
 from talos import __version__
 from talos.config import settings
-from talos.runtime.runner import get_message_text, run_agent, run_chat_turn
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 console = Console()
 
 
 @app.command()
-def run(prompt: str) -> None:
-    """Run Talos with a single prompt."""
-    output = run_agent(prompt)
-    typer.echo(output)
+def chat(
+    prompt: Optional[str] = typer.Argument(
+        None, help="Optional first message to seed the session."
+    ),
+    no_interactive: bool = typer.Option(
+        False, "--no-interactive", "-n", help="Answer once and exit (no REPL)."
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m", help="Override the configured model."
+    ),
+) -> None:
+    """💬 Chat with Talos (interactive by default)."""
+    from talos.runtime.runner import repl, run_once
+
+    if no_interactive:
+        if not prompt:
+            raise typer.BadParameter("--no-interactive needs a PROMPT argument")
+        asyncio.run(run_once(prompt, model))
+    else:
+        asyncio.run(repl(model, initial_prompt=prompt))
 
 
 @app.command()
-def chat() -> None:
-    """Start an interactive Talos chat session."""
-    typer.echo("Talos chat started. Type /exit to quit.")
+def run(
+    prompt: str = typer.Argument(..., help="The task for Talos."),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+) -> None:
+    """⚡ One-shot: send a single prompt, stream the answer, exit."""
+    from talos.runtime.runner import run_once
 
-    messages: list[BaseMessage] = []
-
-    while True:
-        user_input = typer.prompt("you")
-
-        if user_input.strip() in {"/exit", "/quit"}:
-            typer.echo("bye")
-            raise typer.Exit()
-
-        messages = run_chat_turn(messages, user_input)
-        last_message = messages[-1]
-
-        typer.echo(f"talos: {get_message_text(last_message)}")
+    asyncio.run(run_once(prompt, model))
 
 
 @app.command()

@@ -1,3 +1,3 @@
-from talos.runtime.runner import run_agent
+from talos.runtime.runner import Runtime, repl, run_once
 
-__all__ = ["run_agent"]
+__all__ = ["Runtime", "repl", "run_once"]
