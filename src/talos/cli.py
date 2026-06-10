@@ -187,6 +187,21 @@ def models() -> None:
 
 
 @app.command()
+def tui(
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+    yolo: bool = typer.Option(False, "--yolo"),
+) -> None:
+    """🖼️  Full-screen Textual interface (experimental) — real sidebar,
+    modal permission dialogs. 'talos chat' remains the classic CLI."""
+    try:
+        from talos.tui_app import run_tui
+    except ImportError:
+        console.print("[red]textual not installed — pip install 'talos[tui]'[/]")
+        raise typer.Exit(1)
+    run_tui(model=model, yolo=yolo)
+
+
+@app.command()
 def version() -> None:
     """🏷️  Print the Talos version."""
     console.print(f"🤖 talos [bold cyan]{__version__}[/]")

@@ -34,6 +34,7 @@ talos chat                       # 💬 interactive
 talos run "summarize this repo"  # ⚡ one-shot
 talos chat -n "fix the README"   # ⚡ one-shot, kiro-style --no-interactive
 talos chat -r latest             # 💾 resume your last session
+talos tui                        # 🖼️ full-screen Textual UI (pip install -e ".[tui]")
 ```
 
 Works with OpenAI, Anthropic (`https://api.anthropic.com/v1/`), OpenRouter, Ollama (`http://localhost:11434/v1`), vLLM, LM Studio — same protocol, different `TALOS_BASE_URL`.

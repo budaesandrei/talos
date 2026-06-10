@@ -56,6 +56,17 @@ always current, never printed into the transcript. The lesson: status
 belongs in *chrome* (re-rendered UI), history belongs in the
 *transcript* — mixing them is what makes CLI conversations unreadable.
 
+**The Textual edition** (`tui_app.py`, M31): `talos tui` is the same
+brain behind a full-screen [Textual](https://textual.textualize.io)
+app — a real right sidebar (model · tokens · cost, always visible),
+styled user/agent chat blocks, modal permission dialogs, Esc for a
+graceful stop. The trade it makes: Textual owns the whole screen, so
+you lose native scrollback and pipe-friendliness — which is exactly why
+`talos chat` (prompt + stream) stays the default. The architectural
+proof: `tui_app.py` imports only UI-free modules (graph, sessions,
+models, permissions, context). Two faces, one brain — if your rendering
+layer can't be swapped, it was never a layer.
+
 **The banner** (`banner.py`): half-block pixel art (each cell = two
 pixels), centered, with a molten-bronze gradient sweep on a 24fps
 `rich.Live` — skipped when stdout isn't a terminal so pipes stay clean.
