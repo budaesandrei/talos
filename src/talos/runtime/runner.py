@@ -39,6 +39,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from talos.banner import print_banner
 from talos.commands import dispatch, help_text
 from talos.config import settings
 from talos.context import build_system_prompt
@@ -337,16 +338,13 @@ async def repl(
     """💬 Interactive mode."""
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
 
-    subtitle = "[dim]/exit quits · Ctrl-C interrupts a turn[/]"
-    body = (
-        f"model [magenta]{model or settings.model}[/] · "
-        f"session [cyan]{rt.session_id}[/]"
+    print_banner(
+        console,
+        model=model or settings.model,
+        session_id=rt.session_id,
+        yolo=yolo or settings.yolo,
+        resumed=len(rt.messages) if resume else 0,
     )
-    if yolo or settings.yolo:
-        body += " · [bold red]⚡ yolo[/]"
-    if resume and rt.messages:
-        body += f"\n[dim]💾 resumed with {len(rt.messages)} messages[/]"
-    console.print(Panel(body, title="🤖 talos", subtitle=subtitle, border_style="cyan"))
 
     if initial_prompt:
         console.print(f"[bold cyan]you ›[/] {initial_prompt}")
