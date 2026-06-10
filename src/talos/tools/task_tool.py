@@ -28,7 +28,7 @@ DEFAULT_SUBAGENT_TOOLS = ["read_file", "list_dir", "glob_files", "grep", "web_fe
 def _resolve_tools(names: list[str]):
     from talos.tools import get_tools  # late import to avoid a cycle
 
-    wanted = set(names or DEFAULT_SUBAGENT_TOOLS) - {"task"}  # 🚫 no recursion
+    wanted = set(names or DEFAULT_SUBAGENT_TOOLS) - {"task", "team"}  # 🚫 no recursion
     return [t for t in get_tools() if t.name in wanted]
 
 

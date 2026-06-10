@@ -14,6 +14,7 @@ from talos.tools.shell import shell
 from talos.tools.recall_tool import recall_memory
 from talos.tools.skill_tool import load_skill
 from talos.tools.task_tool import task
+from talos.tools.team_tool import team
 from talos.tools.web import web_fetch
 
 
@@ -32,4 +33,5 @@ def get_tools() -> list[BaseTool]:
         load_skill,
         recall_memory,
         task,
+        team,
     ]
