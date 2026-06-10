@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # tables, syntax-highlighted code). Set false for raw text streaming.
     markdown: bool = True
 
+    # 📦 Shell execution sandbox: "off" | "docker". docker runs each shell
+    # command in a throwaway network-isolated container (zero overhead off).
+    sandbox: str = "off"
+    sandbox_image: str | None = None
+
     # 🛡️ Skip all permission prompts (same idea as kiro's --yolo /
     # claude's --dangerously-skip-permissions). CLI flag overrides this.
     yolo: bool = False

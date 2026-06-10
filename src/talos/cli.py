@@ -225,4 +225,5 @@ def config() -> None:
     table.add_row("temperature", str(settings.temperature))
     table.add_row("max_iterations", str(settings.max_iterations))
     table.add_row("yolo", str(settings.yolo))
+    table.add_row("sandbox", settings.sandbox)
     console.print(table)

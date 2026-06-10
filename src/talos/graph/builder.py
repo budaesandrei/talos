@@ -24,6 +24,7 @@ from langgraph.graph import END, START, StateGraph
 
 from talos.graph.state import AgentState
 from talos.permissions import PermissionGate
+from talos.policy import check_action
 
 
 STOP_NOTICE = (
@@ -69,6 +70,13 @@ def build_agent_graph(
                         name=call["name"],
                     )
                 )
+                continue
+            # 🚧 deterministic policy runs BEFORE the gate — a denied action
+            # never even becomes a prompt the human could approve
+            denial = check_action(call["name"], call["args"])
+            if denial is not None:
+                results.append(ToolMessage(
+                    content=denial, tool_call_id=call["id"], name=call["name"]))
                 continue
             allowed, reason = (True, "") if gate is None else await gate.check(
                 call["name"], call["args"]

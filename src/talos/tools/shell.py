@@ -9,6 +9,7 @@ import subprocess
 from langchain_core.tools import tool
 
 from talos.environment import detect_shell, shell_command
+from talos.sandbox import wrap_command
 
 TIMEOUT_SECONDS = 120
 MAX_OUTPUT_CHARS = 8_000
@@ -19,7 +20,13 @@ def shell(command: str) -> str:
     """Run a shell command and return its output (stdout + stderr, exit code).
     The executing shell and its syntax rules are listed in your Environment
     section — use that syntax."""
+    import os
+
     cmd = shell_command(command)
+    # 📦 optionally wrap for sandboxed execution (identity when off)
+    wrapped = wrap_command(command, os.getcwd())
+    if isinstance(wrapped, list):
+        cmd = wrapped
     try:
         proc = subprocess.run(
             cmd,
