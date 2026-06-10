@@ -31,13 +31,21 @@ def mcp_config_file() -> Path:
 
 def load_mcp_config() -> dict:
     f = mcp_config_file()
-    if not f.is_file():
-        return {}
+    servers = {}
+    if f.is_file():
+        try:
+            servers = json.loads(f.read_text(encoding="utf-8")).get("mcpServers", {})
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid {f}: {exc}") from exc
+    # 🔗 merge MCP servers linked from other agents (local wins on name)
     try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid {f}: {exc}") from exc
-    return data.get("mcpServers", {})
+        from talos.linking import discover_linked_mcp
+
+        for name, spec in discover_linked_mcp().items():
+            servers.setdefault(name, spec)
+    except Exception:
+        pass
+    return servers
 
 
 def _to_adapter_config(servers: dict) -> dict:

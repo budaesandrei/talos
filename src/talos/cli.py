@@ -208,6 +208,39 @@ def tui(
 
 
 @app.command()
+def link(path: str = typer.Argument(..., help="Agent dir to link, e.g. ~/.kiro")) -> None:
+    """🔗 Link another agent's skills/agents/MCPs (kiro, cursor, claude…)."""
+    from talos.linking import add_link
+
+    console.print(add_link(path))
+
+
+@app.command()
+def links() -> None:
+    """🔗 Show linked agent directories and what they contribute."""
+    from talos.linking import discover_linked_mcp, discover_linked_skills, load_links
+
+    linked = load_links()
+    if not linked:
+        console.print("[dim]no links — try: talos link ~/.kiro[/]")
+        return
+    for p in linked:
+        console.print(f"  🔗 [cyan]{p}[/]")
+    sk = discover_linked_skills()
+    mc = discover_linked_mcp()
+    console.print(f"[dim]→ {len(sk)} skill(s), {len(mc)} MCP server(s) "
+                  "(deduped by name, first link wins)[/]")
+
+
+@app.command()
+def unlink(path: str = typer.Argument(...)) -> None:
+    """🔗 Remove a linked agent directory."""
+    from talos.linking import remove_link
+
+    console.print(remove_link(path))
+
+
+@app.command()
 def version() -> None:
     """🏷️  Print the Talos version."""
     console.print(f"🤖 talos [bold cyan]{__version__}[/]")

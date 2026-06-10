@@ -51,18 +51,33 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
 
 def discover_skills() -> list[Skill]:
     found = []
+    seen = set()
     base = skills_dir()
-    if not base.is_dir():
-        return found
-    for skill_file in sorted(base.glob("*/SKILL.md")):
-        meta, _ = _parse_frontmatter(skill_file.read_text(encoding="utf-8"))
-        found.append(
-            Skill(
-                name=meta.get("name", skill_file.parent.name),
+    if base.is_dir():
+        for skill_file in sorted(base.glob("*/SKILL.md")):
+            meta, _ = _parse_frontmatter(skill_file.read_text(encoding="utf-8"))
+            name = meta.get("name", skill_file.parent.name)
+            seen.add(name)
+            found.append(Skill(
+                name=name,
                 description=meta.get("description", "(no description)"),
                 path=skill_file,
-            )
-        )
+            ))
+    # 🔗 skills linked from other agents (kiro/cursor/…), local wins on name
+    try:
+        from talos.linking import discover_linked_skills
+
+        for s in discover_linked_skills():
+            if s["name"] in seen:
+                continue
+            seen.add(s["name"])
+            found.append(Skill(
+                name=s["name"],
+                description=f"{s['description']} (via {s['source']})",
+                path=Path(s["path"]),
+            ))
+    except Exception:
+        pass
     return found
 
 
