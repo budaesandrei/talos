@@ -17,6 +17,7 @@ BUILTINS = {
     "/tools": "list the agent's tools",
     "/memory": "show long-term memory",
     "/mermaid": "open mermaid diagrams from the last reply in the browser",
+    "/usage": "show token usage for this session",
     "/exit": "quit (also /quit)",
 }
 

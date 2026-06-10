@@ -60,3 +60,24 @@ async def test_api_failure_does_not_kill_the_session(tmp_path, monkeypatch):
 
     saved = load_session(latest_session_id())
     assert saved[-1].content == "hello?"  # history survived the crash
+
+
+async def test_usage_is_tracked_per_turn_and_session(tmp_path, monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from talos.runtime import runner
+    from tests.fakes import FakeToolCallingModel
+
+    monkeypatch.chdir(tmp_path)
+    reply = AIMessage(
+        content="hi",
+        usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+    )
+    monkeypatch.setattr(
+        runner, "build_llm", lambda model=None: FakeToolCallingModel(responses=[reply])
+    )
+    rt = runner.Runtime(interactive=False)
+    await rt.turn("hello")
+    assert rt.usage["input"] == 100
+    assert rt.usage["total"] == 120
+    assert rt.usage["turns"] == 1

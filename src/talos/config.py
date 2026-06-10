@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # GraphRecursionError. One think->act round trip costs 2 steps.
     max_iterations: int = 50
 
+    # 📊 Print a dim per-turn token-usage footer (input/output/total).
+    show_usage: bool = True
+
     # 🎨 Render assistant responses as markdown in the terminal (headings,
     # tables, syntax-highlighted code). Set false for raw text streaming.
     markdown: bool = True

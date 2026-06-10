@@ -137,6 +137,9 @@ class Runtime:
             self.session_id = new_session_id()
             self.messages = []
         self.last_mermaid: list[str] = []  # 🧜 filled after each reply
+        # 📊 running totals from AIMessage.usage_metadata (LangChain
+        # normalizes every provider's usage block into this one shape)
+        self.usage = {"input": 0, "output": 0, "total": 0, "turns": 0}
 
     # ── 🛡️ permission prompt (pauses the spinner) ───────────────────────
     def _ask_permission(self, tool_name: str, args: dict) -> str:
@@ -158,6 +161,8 @@ class Runtime:
 
     # ── 💬 one user turn ─────────────────────────────────────────────────
     async def turn(self, user_input: str) -> str:
+        self._turn_usage = {"input": 0, "output": 0, "total": 0}
+        self.usage["turns"] += 1
         self.messages.append(HumanMessage(content=user_input))
         collected: list[BaseMessage] = []
         # 🎨 streaming state: with markdown on, we re-render the growing
@@ -217,6 +222,7 @@ class Runtime:
                     for node, update in (payload or {}).items():
                         for msg in (update or {}).get("messages", []):
                             collected.append(msg)
+                            self._track_usage(msg)
                             self._render_side_effects(msg)
                         if node == "tools":
                             # back to the model for the next think step
@@ -255,7 +261,33 @@ class Runtime:
                 f"[dim]🧜 {len(self.last_mermaid)} mermaid diagram(s) — "
                 "type /mermaid to open in your browser[/]"
             )
+
+        # 📊 per-turn usage footer
+        if settings.show_usage and self._turn_usage["total"]:
+            t, s = self._turn_usage, self.usage
+            console.print(
+                f"[dim]📊 ↑{t['input']:,} ↓{t['output']:,} tok"
+                f"  ·  session {s['total']:,}[/]"
+            )
         return final
+
+    def _track_usage(self, msg: BaseMessage) -> None:
+        """📊 Each AIMessage carries normalized usage_metadata; sum it.
+
+        Note: input_tokens counts the WHOLE context every call, so a turn
+        with several think→act steps re-bills the conversation prefix each
+        step — that's why context discipline (subagents, lazy skills)
+        saves real money.
+        """
+        um = getattr(msg, "usage_metadata", None)
+        if not um:
+            return
+        for ours, theirs in (("input", "input_tokens"),
+                             ("output", "output_tokens"),
+                             ("total", "total_tokens")):
+            amount = um.get(theirs) or 0
+            self._turn_usage[ours] += amount
+            self.usage[ours] += amount
 
     # ── 🔧 render tool activity ──────────────────────────────────────────
     def _render_side_effects(self, msg: BaseMessage) -> None:
@@ -366,6 +398,13 @@ def _run_builtin(name: str, rt: Runtime) -> None:
         from talos.memory import load_memory
 
         console.print(load_memory() or "[dim](memory is empty)[/]")
+    elif name == "/usage":
+        u = rt.usage
+        console.print(
+            f"📊 session usage — [cyan]{u['turns']}[/] turn(s) · "
+            f"↑ [cyan]{u['input']:,}[/] in · ↓ [cyan]{u['output']:,}[/] out · "
+            f"[bold cyan]{u['total']:,}[/] total tokens"
+        )
     elif name == "/mermaid":
         if rt.last_mermaid:
             path = open_in_browser(rt.last_mermaid)
