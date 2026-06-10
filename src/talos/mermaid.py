@@ -8,6 +8,8 @@ real diagram in the default browser via mermaid.js (CDN, no install).
 
 import html
 import re
+import shutil
+import subprocess
 import tempfile
 import webbrowser
 from pathlib import Path
@@ -24,6 +26,22 @@ mermaid.initialize({{ startOnLoad: true }});
 </script>
 </body></html>
 """
+
+
+def ascii_render(block: str) -> str | None:
+    """Render via the optional `mermaid-ascii` binary (Go tool:
+    github.com/AlexanderGrooff/mermaid-ascii). Returns None when the tool
+    is missing or chokes on the diagram type (it supports a subset)."""
+    exe = shutil.which("mermaid-ascii")
+    if not exe:
+        return None
+    try:
+        proc = subprocess.run(
+            [exe], input=block, capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 and proc.stdout.strip() else None
 
 
 def extract_mermaid(text: str) -> list[str]:

@@ -38,8 +38,11 @@ def load_rules() -> str:
 
 
 def environment_info() -> str:
+    from talos.environment import describe  # late import (reads settings)
+
     return (
         "## Environment\n"
+        f"{describe()}\n"
         f"- working directory: {Path.cwd()}\n"
         f"- today's date: {datetime.now():%Y-%m-%d}"
     )

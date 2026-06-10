@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # GraphRecursionError. One think->act round trip costs 2 steps.
     max_iterations: int = 50
 
+    # 🖥️ Which shell the `shell` tool uses: auto | powershell | pwsh |
+    # cmd | bash | zsh | sh.  auto → PowerShell on Windows, $SHELL elsewhere.
+    shell: str = "auto"
+
     # 📊 Print a dim per-turn token-usage footer (input/output/total).
     show_usage: bool = True
 

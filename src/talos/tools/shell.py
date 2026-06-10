@@ -8,17 +8,22 @@ import subprocess
 
 from langchain_core.tools import tool
 
+from talos.environment import detect_shell, shell_command
+
 TIMEOUT_SECONDS = 120
 MAX_OUTPUT_CHARS = 8_000
 
 
 @tool
 def shell(command: str) -> str:
-    """Run a shell command and return its output (stdout + stderr, exit code)."""
+    """Run a shell command and return its output (stdout + stderr, exit code).
+    The executing shell and its syntax rules are listed in your Environment
+    section — use that syntax."""
+    cmd = shell_command(command)
     try:
         proc = subprocess.run(
-            command,
-            shell=True,
+            cmd,
+            shell=isinstance(cmd, str),
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
@@ -29,4 +34,4 @@ def shell(command: str) -> str:
     out = (proc.stdout or "") + (proc.stderr or "")
     if len(out) > MAX_OUTPUT_CHARS:
         out = out[:MAX_OUTPUT_CHARS] + f"\n… [truncated, {len(out) - MAX_OUTPUT_CHARS} more chars]"
-    return f"exit code: {proc.returncode}\n{out}".strip()
+    return f"exit code: {proc.returncode} (shell: {detect_shell()})\n{out}".strip()

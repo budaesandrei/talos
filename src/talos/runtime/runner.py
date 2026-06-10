@@ -51,7 +51,7 @@ from talos.context import build_system_prompt
 from talos.graph.builder import build_agent_graph
 from talos.llm import build_llm
 from talos.mcp import load_mcp_tools
-from talos.mermaid import extract_mermaid, open_in_browser
+from talos.mermaid import ascii_render, extract_mermaid, open_in_browser
 from talos.permissions import PermissionGate
 from talos.sessions import (
     latest_session_id,
@@ -340,6 +340,10 @@ class Runtime:
         # 🧜 mermaid can't render in a terminal — offer the browser instead.
         self.last_mermaid = extract_mermaid(final)
         if self.last_mermaid:
+            for block in self.last_mermaid:
+                art = ascii_render(block)
+                if art:
+                    console.print(Panel(art, border_style="dim", title="🧜 mermaid"))
             console.print(
                 f"[dim]🧜 {len(self.last_mermaid)} mermaid diagram(s) — "
                 "type /mermaid to open in your browser[/]"
