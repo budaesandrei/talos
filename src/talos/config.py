@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # GraphRecursionError. One think->act round trip costs 2 steps.
     max_iterations: int = 50
 
+    # 🛡️ Skip all permission prompts (same idea as kiro's --yolo /
+    # claude's --dangerously-skip-permissions). CLI flag overrides this.
+    yolo: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

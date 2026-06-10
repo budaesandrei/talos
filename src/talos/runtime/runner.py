@@ -29,6 +29,7 @@ from talos.config import settings
 from talos.context import build_system_prompt
 from talos.graph.builder import build_agent_graph
 from talos.llm import build_llm
+from talos.permissions import PermissionGate
 from talos.tools import get_tools
 
 console = Console()
@@ -53,14 +54,32 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _ask_permission(tool_name: str, args: dict) -> str:
+    """🛡️ Interactive approval prompt (used by the PermissionGate)."""
+    console.print(
+        f"\n[bold yellow]🛡️  {tool_name}[/]([dim]{_args_preview(args, 400)}[/])"
+    )
+    return console.input("[yellow]allow? \[y]es · \[n]o · \[a]lways ›[/] ")
+
+
 class Runtime:
     """One conversation: a compiled graph + the message history."""
 
-    def __init__(self, model: str | None = None):
+    def __init__(
+        self,
+        model: str | None = None,
+        yolo: bool = False,
+        interactive: bool = True,
+    ):
+        gate = PermissionGate(
+            approver=_ask_permission if interactive else None,
+            yolo=yolo or settings.yolo,
+        )
         self.graph = build_agent_graph(
             llm=build_llm(model),
             tools=get_tools(),
             system_prompt=build_system_prompt(),
+            gate=gate,
         )
         self.messages: list[BaseMessage] = []
 
@@ -124,14 +143,22 @@ class Runtime:
             console.print(f"[dim]   ↳ {first[:120]}{more}[/]")
 
 
-async def run_once(prompt: str, model: str | None = None) -> None:
-    """⚡ One-shot mode: single turn, then exit (good for scripts/pipes)."""
-    await Runtime(model).turn(prompt)
+async def run_once(prompt: str, model: str | None = None, yolo: bool = False) -> None:
+    """⚡ One-shot mode: single turn, then exit (good for scripts/pipes).
+
+    Non-interactive runs can't ask for approval, so mutating tools are
+    denied unless ``--yolo`` is passed.
+    """
+    await Runtime(model, yolo=yolo, interactive=False).turn(prompt)
 
 
-async def repl(model: str | None = None, initial_prompt: str | None = None) -> None:
+async def repl(
+    model: str | None = None,
+    initial_prompt: str | None = None,
+    yolo: bool = False,
+) -> None:
     """💬 Interactive mode."""
-    rt = Runtime(model)
+    rt = Runtime(model, yolo=yolo)
     console.print(
         f"[bold cyan]🤖 talos[/] — model [magenta]{model or settings.model}[/] · "
         "[dim]/exit to quit[/]"

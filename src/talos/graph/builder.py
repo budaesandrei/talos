@@ -22,12 +22,14 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
 from talos.graph.state import AgentState
+from talos.permissions import PermissionGate
 
 
 def build_agent_graph(
     llm: BaseChatModel,
     tools: Sequence[BaseTool],
     system_prompt: str,
+    gate: PermissionGate | None = None,
 ):
     # bind_tools() attaches the tools' JSON schemas to every request, which
     # is how the model knows what it *can* call.
@@ -48,8 +50,14 @@ def build_agent_graph(
 
         for call in last.tool_calls:
             tool = tools_by_name.get(call["name"])
+            allowed, reason = (True, "") if gate is None else gate.check(
+                call["name"], call["args"]
+            )
             if tool is None:
                 output = f"Error: unknown tool '{call['name']}'"
+            elif not allowed:
+                # 🛡️ Denial is information: the model sees it and can adapt.
+                output = reason
             else:
                 try:
                     output = await tool.ainvoke(call["args"])

@@ -34,6 +34,9 @@ def chat(
     model: Optional[str] = typer.Option(
         None, "--model", "-m", help="Override the configured model."
     ),
+    yolo: bool = typer.Option(
+        False, "--yolo", help="🛡️  Skip all permission prompts (dangerous)."
+    ),
 ) -> None:
     """💬 Chat with Talos (interactive by default)."""
     from talos.runtime.runner import repl, run_once
@@ -41,20 +44,23 @@ def chat(
     if no_interactive:
         if not prompt:
             raise typer.BadParameter("--no-interactive needs a PROMPT argument")
-        asyncio.run(run_once(prompt, model))
+        asyncio.run(run_once(prompt, model, yolo=yolo))
     else:
-        asyncio.run(repl(model, initial_prompt=prompt))
+        asyncio.run(repl(model, initial_prompt=prompt, yolo=yolo))
 
 
 @app.command()
 def run(
     prompt: str = typer.Argument(..., help="The task for Talos."),
     model: Optional[str] = typer.Option(None, "--model", "-m"),
+    yolo: bool = typer.Option(
+        False, "--yolo", help="🛡️  Skip all permission prompts (dangerous)."
+    ),
 ) -> None:
     """⚡ One-shot: send a single prompt, stream the answer, exit."""
     from talos.runtime.runner import run_once
 
-    asyncio.run(run_once(prompt, model))
+    asyncio.run(run_once(prompt, model, yolo=yolo))
 
 
 @app.command()
@@ -80,4 +86,5 @@ def config() -> None:
     table.add_row("model", settings.model)
     table.add_row("temperature", str(settings.temperature))
     table.add_row("max_iterations", str(settings.max_iterations))
+    table.add_row("yolo", str(settings.yolo))
     console.print(table)
