@@ -1,17 +1,38 @@
+"""⚙️ Talos configuration.
+
+Every knob lives here, loaded by pydantic-settings in priority order:
+
+1. real environment variables  (``TALOS_BASE_URL=... talos chat``)
+2. the ``.env`` file in the current directory
+3. the defaults below
+
+The ``TALOS_`` prefix is stripped automatically, so ``TALOS_MODEL`` in the
+environment becomes ``settings.model`` in code.
+"""
+
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
-DEFAULT_SYSTEM_PROMPT_PATH = PACKAGE_ROOT / "prompts" / "system.md"
 
 
 class Settings(BaseSettings):
-    app_name: str = "talos"
-    env: str = "dev"
-    anthropic_api_key: str | None = None
-    model: str = "claude-sonnet-4-5"
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    # -- 🔌 LLM connection (any OpenAI-compatible endpoint) --------------
+    # Examples:
+    #   OpenAI      -> base_url unset (uses api.openai.com)
+    #   Anthropic   -> https://api.anthropic.com/v1/
+    #   OpenRouter  -> https://openrouter.ai/api/v1
+    #   Ollama      -> http://localhost:11434/v1
+    base_url: str | None = None
+    api_key: str = ""
+    model: str = "gpt-4o-mini"
+    temperature: float = 0.0
+
+    # -- 🧠 Agent behaviour ----------------------------------------------
+    # Max "super-steps" the agent loop may take before LangGraph raises
+    # GraphRecursionError. One think->act round trip costs 2 steps.
+    max_iterations: int = 50
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -21,4 +42,6 @@ class Settings(BaseSettings):
     )
 
 
+# A single shared instance, imported everywhere else as
+# ``from talos.config import settings``.
 settings = Settings()
