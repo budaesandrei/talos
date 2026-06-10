@@ -15,12 +15,15 @@ model decides it's relevant. Compare with rules (always loaded) — skills
 are the lazy-loaded counterpart.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import BaseModel
 
-@dataclass
-class Skill:
+
+class Skill(BaseModel):
+    """One discovered skill. Pydantic v2 model: validated on construction,
+    so a broken SKILL.md fails loudly here instead of mysteriously later."""
+
     name: str
     description: str
     path: Path

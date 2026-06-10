@@ -23,18 +23,20 @@ The main agent sees the roster in its system prompt and delegates via the
 ``task`` tool. Subagents can't spawn subagents (no recursion).
 """
 
-from dataclasses import dataclass, field
 from pathlib import Path
+
+from pydantic import BaseModel, Field
 
 from talos.skills import _parse_frontmatter  # same minimal frontmatter format
 
 
-@dataclass
-class AgentDef:
+class AgentDef(BaseModel):
+    """One subagent definition (pydantic v2 — see Skill for the rationale)."""
+
     name: str
     description: str
     system_prompt: str
-    tools: list[str] = field(default_factory=list)  # empty = safe default set
+    tools: list[str] = Field(default_factory=list)  # empty = safe default set
     model: str | None = None
 
 
