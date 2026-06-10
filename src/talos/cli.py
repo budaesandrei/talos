@@ -134,6 +134,31 @@ def commands() -> None:
 
 
 @app.command()
+def mcp() -> None:
+    """🔌 Show configured MCP servers and the tools they expose."""
+    from talos.mcp import load_mcp_config, load_mcp_tools, mcp_config_file
+
+    servers = load_mcp_config()
+    if not servers:
+        console.print(f"[dim]no MCP servers — create {mcp_config_file()}[/]")
+        return
+    for name, spec in servers.items():
+        target = spec.get("command", spec.get("url", "?"))
+        console.print(f"  [cyan]{name}[/] → {target}")
+    try:
+        tools = asyncio.run(load_mcp_tools())
+    except (RuntimeError, ValueError) as exc:
+        console.print(f"[yellow]{exc}[/]")
+        return
+    table = Table(title="🔌 MCP tools")
+    table.add_column("tool", style="cyan")
+    table.add_column("description")
+    for t in tools:
+        table.add_row(t.name, (t.description or "").splitlines()[0][:80])
+    console.print(table)
+
+
+@app.command()
 def version() -> None:
     """🏷️  Print the Talos version."""
     console.print(f"🤖 talos [bold cyan]{__version__}[/]")

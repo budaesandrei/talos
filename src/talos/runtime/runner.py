@@ -42,6 +42,7 @@ from talos.config import settings
 from talos.context import build_system_prompt
 from talos.graph.builder import build_agent_graph
 from talos.llm import build_llm
+from talos.mcp import load_mcp_tools
 from talos.permissions import PermissionGate
 from talos.sessions import (
     latest_session_id,
@@ -109,6 +110,7 @@ class Runtime:
         yolo: bool = False,
         interactive: bool = True,
         resume: str | None = None,
+        extra_tools: list | None = None,
     ):
         self.status = _Status()
         gate = PermissionGate(
@@ -117,7 +119,7 @@ class Runtime:
         )
         self.graph = build_agent_graph(
             llm=build_llm(model),
-            tools=get_tools(),
+            tools=get_tools() + list(extra_tools or []),  # built-ins + 🔌 MCP
             system_prompt=build_system_prompt(),
             gate=gate,
         )
@@ -224,13 +226,25 @@ class Runtime:
             console.print(f"[dim]   ↳ {icon} {first[:120]}{more}[/]")
 
 
+async def _gather_mcp_tools() -> list:
+    try:
+        tools = await load_mcp_tools()
+    except (RuntimeError, ValueError) as exc:
+        console.print(f"[yellow]🔌 MCP: {exc}[/]")
+        return []
+    if tools:
+        console.print(f"[dim]🔌 {len(tools)} MCP tool(s) connected[/]")
+    return tools
+
+
 async def run_once(prompt: str, model: str | None = None, yolo: bool = False) -> None:
     """⚡ One-shot mode: single turn, then exit (good for scripts/pipes).
 
     Non-interactive runs can't ask for approval, so mutating tools are
     denied unless ``--yolo`` is passed.
     """
-    await Runtime(model, yolo=yolo, interactive=False).turn(prompt)
+    extra = await _gather_mcp_tools()
+    await Runtime(model, yolo=yolo, interactive=False, extra_tools=extra).turn(prompt)
 
 
 async def repl(
@@ -240,7 +254,7 @@ async def repl(
     resume: str | None = None,
 ) -> None:
     """💬 Interactive mode."""
-    rt = Runtime(model, yolo=yolo, resume=resume)
+    rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
 
     subtitle = "[dim]/exit quits · Ctrl-C interrupts a turn[/]"
     body = (
