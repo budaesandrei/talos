@@ -76,3 +76,62 @@ def test_fallback_prices_when_db_unreachable(monkeypatch):
     cost = mm.estimate_cost("claude-sonnet-4-5", 1000, 100)
     assert round(cost, 4) == round(1000 * 3e-6 + 100 * 15e-6, 4)
     monkeypatch.setattr(mm, "_db_memo", None)  # don't leak the memo
+
+
+def test_provider_models_prices_win_over_github_db(monkeypatch):
+    """Enterprise gateways return per-token prices in /models — those are
+    OUR prices and must beat the public db."""
+    import talos.models as mm
+
+    monkeypatch.setattr(mm, "_provider_meta", {})
+    monkeypatch.setattr(mm, "_db_memo", {"my-model": {
+        "input_cost_per_token": 99e-6, "output_cost_per_token": 99e-6}})
+    entry = {"id": "my-model",
+             "model_info": {"input_cost_per_token": 2e-6,
+                            "output_cost_per_token": 4e-6,
+                            "max_input_tokens": 32000}}
+    mm._provider_meta["my-model"] = mm._entry_meta(entry)
+
+    cost = mm.estimate_cost("my-model", 1000, 500)
+    assert abs(cost - (1000 * 2e-6 + 500 * 4e-6)) < 1e-12  # provider, not 99
+
+    (m,) = mm.parse_models({"data": [entry]}, {})
+    assert m.input_per_m == 2.0 and m.context == 32000
+    monkeypatch.setattr(mm, "_db_memo", None)
+    monkeypatch.setattr(mm, "_provider_meta", {})
+
+
+def test_one_sided_provider_price_coalesces_to_zero(monkeypatch):
+    import talos.models as mm
+
+    monkeypatch.setattr(mm, "_provider_meta",
+                        {"half": {"input_cost_per_token": 1e-6}})
+    monkeypatch.setattr(mm, "_db_memo", {})
+    assert mm.estimate_cost("half", 1000, 1000) == 1000 * 1e-6  # out side = 0
+    monkeypatch.setattr(mm, "_db_memo", None)
+    monkeypatch.setattr(mm, "_provider_meta", {})
+
+
+def test_models_list_is_fetched_once(monkeypatch):
+    import httpx as _httpx
+
+    import talos.models as mm
+
+    calls = {"n": 0}
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"id": "m1"}]}
+
+    def fake_get(*a, **kw):
+        calls["n"] += 1
+        return FakeResp()
+
+    monkeypatch.setattr(mm, "_models_memo", None)
+    monkeypatch.setattr(mm, "_db_memo", {})
+    monkeypatch.setattr(_httpx, "get", fake_get)
+    mm.list_models()
+    mm.list_models()
+    assert calls["n"] == 1  # cached after the first round trip
+    monkeypatch.setattr(mm, "_models_memo", None)
+    monkeypatch.setattr(mm, "_db_memo", None)

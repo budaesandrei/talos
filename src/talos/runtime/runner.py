@@ -724,6 +724,12 @@ async def repl(
         title=rt.title,
     )
 
+    # 🔥 warm /models in the background: one round trip gives the picker
+    # its list AND the cost engine the provider's own per-token prices
+    from talos.models import prime_models_cache
+
+    asyncio.get_running_loop().run_in_executor(None, prime_models_cache)
+
     pump = make_pump(stats=rt.stats_line)  # sole stdin reader + 📊 rprompt
     if pump.fancy:
         rt.status.sink = pump.status_state  # ⚒ status renders in the toolbar

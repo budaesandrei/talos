@@ -113,6 +113,10 @@ class TalosApp(App):
     def on_mount(self) -> None:
         self.query_one(Input).focus()
         self._refresh_sidebar()
+        # 🔥 warm /models for provider-accurate costs in the sidebar
+        from talos.models import prime_models_cache
+
+        self.run_worker(asyncio.to_thread(prime_models_cache), exclusive=False)
 
     # ── helpers ──────────────────────────────────────────────────────────
     def _append(self, widget: Static) -> Static:

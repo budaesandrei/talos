@@ -42,7 +42,9 @@ FALLBACK_PRICES = {
     "deepseek-chat":      {"max_input_tokens": 65536,  "input_cost_per_token": 0.27e-6, "output_cost_per_token": 1.1e-6, "supports_vision": False},
 }
 
-_db_memo: dict | None = None  # one resolution per process
+_db_memo: dict | None = None      # GitHub db: one resolution per process
+_models_memo: list | None = None   # /models list: fetched once per process
+_provider_meta: dict = {}          # raw per-model metadata from /models
 
 
 class ModelInfo(BaseModel):
@@ -89,6 +91,40 @@ def lookup(model_id: str, db: dict | None = None) -> dict:
     return {}
 
 
+def _entry_meta(entry: dict) -> dict:
+    """Pricing/capability fields straight from the provider's /models
+    entry. Enterprise gateways (LiteLLM proxies etc.) return
+    input_cost_per_token / output_cost_per_token either at the top level
+    or under model_info — and those are YOUR negotiated prices, more
+    accurate than any public database. OpenRouter's pricing block is
+    translated to the same shape."""
+    info = {**(entry.get("model_info") or {}), **entry}
+    out = {}
+    for key in ("input_cost_per_token", "output_cost_per_token",
+                "max_input_tokens", "supports_vision"):
+        if info.get(key) is not None:
+            out[key] = info[key]
+    pricing = entry.get("pricing") or {}
+    try:
+        if pricing.get("prompt") is not None:
+            out.setdefault("input_cost_per_token", float(pricing["prompt"]))
+        if pricing.get("completion") is not None:
+            out.setdefault("output_cost_per_token", float(pricing["completion"]))
+    except (TypeError, ValueError):
+        pass
+    if entry.get("context_length"):
+        out.setdefault("max_input_tokens", entry["context_length"])
+    return out
+
+
+def provider_meta(model_id: str) -> dict:
+    """Cached /models metadata for one model (exact id, then bare name)."""
+    for key in (model_id, model_id.split("/")[-1]):
+        if key in _provider_meta:
+            return _provider_meta[key]
+    return {}
+
+
 def _normalize_payload(payload) -> list[dict]:
     """/models responses come in three shapes in the wild:
     {"data": [...]}, a bare [...] list (some compat layers, incl.
@@ -114,19 +150,12 @@ def parse_models(payload, db: dict | None = None) -> list[ModelInfo]:
         mid = entry.get("id") or entry.get("name", "")
         if not mid:
             continue
-        meta = lookup(mid, db)
-        pricing = entry.get("pricing") or {}        # OpenRouter extension
+        # provider's own fields first, public db second
+        meta = {**lookup(mid, db), **_entry_meta(entry)}
         arch = entry.get("architecture") or {}      # OpenRouter extension
 
-        def per_m(or_key, ll_key):
-            if pricing.get(or_key) is not None:
-                try:
-                    return float(pricing[or_key]) * 1_000_000
-                except (TypeError, ValueError):
-                    pass
-            if meta.get(ll_key) is not None:
-                return float(meta[ll_key]) * 1_000_000
-            return None
+        def per_m(key):
+            return float(meta[key]) * 1_000_000 if meta.get(key) is not None else None
 
         vision = None
         if arch.get("modality"):
@@ -137,17 +166,22 @@ def parse_models(payload, db: dict | None = None) -> list[ModelInfo]:
         out.append(
             ModelInfo(
                 id=mid,
-                context=entry.get("context_length") or meta.get("max_input_tokens"),
-                input_per_m=per_m("prompt", "input_cost_per_token"),
-                output_per_m=per_m("completion", "output_cost_per_token"),
+                context=meta.get("max_input_tokens"),
+                input_per_m=per_m("input_cost_per_token"),
+                output_per_m=per_m("output_cost_per_token"),
                 vision=vision,
             )
         )
     return out
 
 
-def list_models() -> list[ModelInfo]:
-    """Hit the provider's /models endpoint (the standard part)."""
+def list_models(refresh: bool = False) -> list[ModelInfo]:
+    """The provider's /models — fetched ONCE per process, then cached.
+    Also caches each entry's raw metadata so estimate_cost can use the
+    provider's own per-token prices."""
+    global _models_memo
+    if _models_memo is not None and not refresh:
+        return _models_memo
     base = (settings.base_url or "https://api.openai.com/v1").rstrip("/")
     resp = httpx.get(
         f"{base}/models",
@@ -156,12 +190,35 @@ def list_models() -> list[ModelInfo]:
         verify=settings.verify_ssl,
     )
     resp.raise_for_status()
-    return parse_models(resp.json())
+    payload = resp.json()
+    for entry in _normalize_payload(payload):
+        mid = entry.get("id") or entry.get("name", "")
+        meta = _entry_meta(entry)
+        if mid and meta:
+            _provider_meta[mid] = meta
+    _models_memo = parse_models(payload)
+    return _models_memo
+
+
+def prime_models_cache() -> int:
+    """🔥 Called in the background at chat startup: one /models round trip
+    warms both the picker and the cost engine. Returns models found."""
+    try:
+        return len(list_models())
+    except Exception:
+        return 0
 
 
 def estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float | None:
-    """Dollars for this many tokens, or None when pricing is unknown."""
-    meta = lookup(model_id)
+    """Dollars for this many tokens. Pricing priority:
+
+    1. the provider's own /models metadata (your enterprise prices)
+    2. the public LiteLLM db (GitHub, cached) / bundled fallback
+    3. unknown → None (the UI hides cost rather than guessing)
+
+    If only one side is priced, the other coalesces to 0.
+    """
+    meta = provider_meta(model_id) or lookup(model_id)
     cin, cout = meta.get("input_cost_per_token"), meta.get("output_cost_per_token")
     if cin is None and cout is None:
         return None
