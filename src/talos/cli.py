@@ -160,6 +160,33 @@ def mcp() -> None:
 
 
 @app.command()
+def models() -> None:
+    """📇 List the provider's models with context/pricing/vision info."""
+    from talos.models import list_models
+
+    try:
+        found = sorted(list_models(), key=lambda m: m.id)
+    except Exception as exc:
+        console.print(f"[red]could not fetch models: {exc}[/]")
+        raise typer.Exit(1)
+    table = Table(title="📇 models")
+    table.add_column("id", style="cyan")
+    table.add_column("ctx", justify="right")
+    table.add_column("$/M in", justify="right")
+    table.add_column("$/M out", justify="right")
+    table.add_column("👁", justify="center")
+    for m in found:
+        table.add_row(
+            m.id,
+            f"{m.context:,}" if m.context else "·",
+            f"{m.input_per_m:.2f}" if m.input_per_m is not None else "·",
+            f"{m.output_per_m:.2f}" if m.output_per_m is not None else "·",
+            "👁" if m.vision else "·",
+        )
+    console.print(table)
+
+
+@app.command()
 def version() -> None:
     """🏷️  Print the Talos version."""
     console.print(f"🤖 talos [bold cyan]{__version__}[/]")

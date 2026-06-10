@@ -52,6 +52,7 @@ from talos.graph.builder import build_agent_graph
 from talos.llm import build_llm
 from talos.mcp import load_mcp_tools
 from talos.mermaid import ascii_render, extract_mermaid, open_in_browser
+from talos.models import estimate_cost
 from talos.permissions import PermissionGate
 from talos.sessions import (
     get_session_meta,
@@ -185,21 +186,17 @@ class Runtime:
         extra_tools: list | None = None,
     ):
         self.status = _Status()
+        self.model_name = model or settings.model
+        self._extra_tools = list(extra_tools or [])
         self.stop_flag = asyncio.Event()        # 🛑 graceful-stop signal
         self.inbox: list[str] = []              # 📨 /btw-style queued notes
         self._activity: list[str] = []          # 🗣️ narrator's source material
         self._line_request: asyncio.Future | None = None  # approval waiting?
-        gate = PermissionGate(
+        self._gate = PermissionGate(
             approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
         )
-        self.graph = build_agent_graph(
-            llm=build_llm(model),
-            tools=get_tools() + list(extra_tools or []),  # built-ins + 🔌 MCP
-            system_prompt=build_system_prompt(),
-            gate=gate,
-            stop_flag=self.stop_flag,
-        )
+        self._rebuild_graph()
         # 💾 Either continue an old session or start a new one.
         if resume:
             session_id = latest_session_id() if resume == "latest" else resume
@@ -219,6 +216,35 @@ class Runtime:
         self.usage = meta.get("usage") or {
             "input": 0, "output": 0, "total": 0, "turns": 0
         }
+
+    def _rebuild_graph(self) -> None:
+        self.graph = build_agent_graph(
+            llm=build_llm(self.model_name),
+            tools=get_tools() + self._extra_tools,  # built-ins + 🔌 MCP
+            system_prompt=build_system_prompt(),
+            gate=self._gate,
+            stop_flag=self.stop_flag,
+        )
+
+    def switch_model(self, model_id: str) -> None:
+        """📇 Same conversation, different brain — history carries over."""
+        self.model_name = model_id
+        self._rebuild_graph()
+        console.print(f"[dim]📇 switched to [magenta]{model_id}[/][/]")
+
+    def session_cost(self) -> float | None:
+        return estimate_cost(self.model_name, self.usage["input"], self.usage["output"])
+
+    def _usage_suffix(self) -> str:
+        """The 'how much have I spent' tail on the spinner line."""
+        total = self.usage["total"]
+        if not total:
+            return ""
+        suffix = f" · {total:,} tok"
+        cost = self.session_cost()
+        if cost is not None:
+            suffix += f" · ${cost:.4f}"
+        return suffix
 
     # ── 🛡️ permission prompt (pauses the spinner) ───────────────────────
     async def _ask_permission(self, tool_name: str, args: dict) -> str:
@@ -272,7 +298,7 @@ class Runtime:
             buffer = ""
             prefix_printed = False
 
-        self.status.set(f"{next(THINKING)}…")
+        self.status.set(f"{next(THINKING)}…{self._usage_suffix()}")
         try:
             async for mode, payload in self.graph.astream(
                 {"messages": self.messages},
@@ -316,7 +342,9 @@ class Runtime:
                             self._render_side_effects(msg)
                         if node == "tools":
                             # back to the model for the next think step
-                            self.status.set(f"{next(THINKING)}…")
+                            self.status.set(
+                                f"{next(THINKING)}…{self._usage_suffix()}"
+                            )
 
         except GraphRecursionError:
             console.print(
@@ -337,7 +365,7 @@ class Runtime:
             self.status.stop()
             self.messages.extend(collected)
             save_session(self.session_id, self.messages)
-            set_session_meta(self.session_id, usage=self.usage)
+            set_session_meta(self.session_id, usage=self.usage, model=self.model_name)
             if not self.title and self.messages:
                 # 🏷️ fire-and-forget: name the session for the resume list
                 asyncio.get_running_loop().create_task(self._make_title())
@@ -363,9 +391,11 @@ class Runtime:
         # 📊 per-turn usage footer
         if settings.show_usage and self._turn_usage["total"]:
             t, s = self._turn_usage, self.usage
+            cost = self.session_cost()
+            cost_part = f" · ${cost:.4f}" if cost is not None else ""
             console.print(
                 f"[dim]📊 ↑{t['input']:,} ↓{t['output']:,} tok"
-                f"  ·  session {s['total']:,}[/]"
+                f"  ·  session {s['total']:,}{cost_part}[/]"
             )
         return final
 
@@ -562,7 +592,7 @@ async def repl(
             if payload == "/exit":
                 console.print("[dim]bye 👋[/]")
                 return False
-            _run_builtin(payload, rt)
+            await _run_builtin(payload, rt, pump)
             return True
         if action == "unknown":
             console.print(f"[red]unknown command {payload}[/] — try /help")
@@ -604,7 +634,7 @@ async def repl(
         if not await handle_line(stripped):
             break
 
-def _run_builtin(name: str, rt: Runtime) -> None:
+async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
     if name == "/help":
         console.print(help_text())
     elif name == "/clear":
@@ -622,15 +652,59 @@ def _run_builtin(name: str, rt: Runtime) -> None:
 
         u = rt.usage
         a = all_time_usage()
+        cost = rt.session_cost()
+        cost_part = f" · [green]${cost:.4f}[/]" if cost is not None else ""
         console.print(
             f"📊 this session — [cyan]{u['turns']}[/] turn(s) · "
             f"↑ [cyan]{u['input']:,}[/] in · ↓ [cyan]{u['output']:,}[/] out · "
-            f"[bold cyan]{u['total']:,}[/] total tokens"
+            f"[bold cyan]{u['total']:,}[/] total tokens{cost_part}"
         )
+        all_cost = a.pop("cost", None)
+        all_cost_part = f" · ${all_cost:.4f}" if all_cost else ""
         console.print(
             f"[dim]   all time — {a['sessions']} session(s) · {a['turns']} turns · "
-            f"{a['total']:,} total tokens[/]"
+            f"{a['total']:,} total tokens{all_cost_part}[/]"
         )
+    elif name == "/models":
+        from talos.models import list_models
+
+        rt.status.set("📇 fetching /models…")
+        try:
+            found = sorted(list_models(), key=lambda m: m.id)
+        except Exception as exc:
+            rt.status.stop()
+            console.print(f"[red]could not fetch models: {exc}[/]")
+            return
+        rt.status.stop()
+        table = Table(title="📇 models (from the provider's /v1/models)")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("id", style="cyan")
+        table.add_column("ctx", justify="right")
+        table.add_column("$/M in", justify="right")
+        table.add_column("$/M out", justify="right")
+        table.add_column("👁", justify="center")
+        for i, m in enumerate(found, 1):
+            table.add_row(
+                str(i),
+                m.id + (" [magenta]← current[/]" if m.id == rt.model_name else ""),
+                f"{m.context:,}" if m.context else "·",
+                f"{m.input_per_m:.2f}" if m.input_per_m is not None else "·",
+                f"{m.output_per_m:.2f}" if m.output_per_m is not None else "·",
+                "👁" if m.vision else "·",
+            )
+        console.print(table)
+        console.print(
+            "[dim]👁 = vision/multimodal · pricing from provider metadata or "
+            "LiteLLM's community db · blank = unknown[/]"
+        )
+        if pump is None:
+            return
+        console.print("[yellow]switch to # (enter to keep current) ›[/] ", end="")
+        choice = await pump.queue.get()
+        if choice and choice.strip().isdigit():
+            n = int(choice.strip())
+            if 1 <= n <= len(found):
+                rt.switch_model(found[n - 1].id)
     elif name == "/mermaid":
         if rt.last_mermaid:
             path = open_in_browser(rt.last_mermaid)

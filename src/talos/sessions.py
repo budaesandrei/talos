@@ -45,14 +45,23 @@ def get_session_meta(session_id: str) -> dict:
 
 
 def all_time_usage() -> dict:
-    """Sum usage across every session ever recorded (for /usage)."""
-    totals = {"input": 0, "output": 0, "total": 0, "turns": 0, "sessions": 0}
+    """Sum usage (and estimated cost) across every recorded session."""
+    from talos.models import estimate_cost  # late import: avoids a cycle
+
+    totals = {"input": 0, "output": 0, "total": 0, "turns": 0,
+              "sessions": 0, "cost": 0.0}
     for meta in _load_index().values():
         usage = meta.get("usage") or {}
         if usage:
             totals["sessions"] += 1
         for key in ("input", "output", "total", "turns"):
             totals[key] += usage.get(key, 0)
+        if meta.get("model"):
+            cost = estimate_cost(
+                meta["model"], usage.get("input", 0), usage.get("output", 0)
+            )
+            if cost:
+                totals["cost"] += cost
     return totals
 
 
