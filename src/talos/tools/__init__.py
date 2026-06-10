@@ -11,6 +11,7 @@ from langchain_core.tools import BaseTool
 from talos.tools.files import edit_file, glob_files, grep, list_dir, read_file, write_file
 from talos.tools.memory_tool import save_memory
 from talos.tools.shell import shell
+from talos.tools.skill_tool import load_skill
 from talos.tools.web import web_fetch
 
 
@@ -26,4 +27,5 @@ def get_tools() -> list[BaseTool]:
         shell,
         web_fetch,
         save_memory,
+        load_skill,
     ]

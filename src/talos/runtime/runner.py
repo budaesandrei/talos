@@ -37,6 +37,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from talos.commands import dispatch, help_text
 from talos.config import settings
 from talos.context import build_system_prompt
 from talos.graph.builder import build_agent_graph
@@ -266,12 +267,39 @@ async def repl(
         stripped = user_input.strip()
         if not stripped:
             continue
-        if stripped in {"/exit", "/quit"}:
-            console.print("[dim]bye 👋[/]")
-            break
+
+        # ⌨️ slash commands are handled client-side, the model never sees them
+        action, payload = dispatch(stripped)
+        if action == "builtin":
+            if payload == "/exit":
+                console.print("[dim]bye 👋[/]")
+                break
+            _run_builtin(payload, rt)
+            continue
+        if action == "unknown":
+            console.print(f"[red]unknown command {payload}[/] — try /help")
+            continue
+        prompt_text = payload  # "chat" → raw line, "prompt" → expanded template
+        if action == "prompt":
+            console.print(f"[dim]⌨️  expanded custom command[/]")
 
         try:
-            await rt.turn(user_input)
+            await rt.turn(prompt_text)
         except KeyboardInterrupt:
             rt.status.stop()
             console.print("\n[yellow]⏹  turn interrupted[/]")
+
+
+def _run_builtin(name: str, rt: Runtime) -> None:
+    if name == "/help":
+        console.print(help_text())
+    elif name == "/clear":
+        rt.messages = []
+        console.print("[dim]🧹 conversation cleared[/]")
+    elif name == "/tools":
+        for t in get_tools():
+            console.print(f"  {TOOL_EMOJI.get(t.name, '🔧')} [cyan]{t.name}[/] — {t.description.splitlines()[0]}")
+    elif name == "/memory":
+        from talos.memory import load_memory
+
+        console.print(load_memory() or "[dim](memory is empty)[/]")

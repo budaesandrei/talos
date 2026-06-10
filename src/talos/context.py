@@ -5,7 +5,8 @@ The system prompt is assembled fresh for each session from layered parts:
 1. the base persona       (``prompts/system.md``)         — ships with Talos
 2. 📜 rules               (``TALOS.md``, ``~/.talos/TALOS.md``) — written by you
 3. 🧠 memory              (``.talos/memory.md``)           — written by the agent
-4. runtime environment    (cwd, date)
+4. 🎒 skills index        (``.talos/skills/*/SKILL.md``)   — names only, lazy-loaded
+5. runtime environment    (cwd, date)
 
 This layering is the same pattern as CLAUDE.md / AGENTS.md / .cursorrules:
 stable instructions live in files, not in chat history.
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from talos.config import PACKAGE_ROOT
 from talos.memory import load_memory
+from talos.skills import skills_summary
 
 BASE_PROMPT_PATH = PACKAGE_ROOT / "prompts" / "system.md"
 
@@ -52,6 +54,10 @@ def build_system_prompt() -> str:
     memory = load_memory()
     if memory:
         parts.append("## Memory (facts you saved in earlier sessions)\n" + memory)
+
+    skills = skills_summary()
+    if skills:
+        parts.append(skills)
 
     parts.append(environment_info())
     return "\n\n".join(parts)

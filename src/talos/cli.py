@@ -86,6 +86,36 @@ def sessions() -> None:
 
 
 @app.command()
+def skills() -> None:
+    """🎒 List discovered skills (.talos/skills/*/SKILL.md)."""
+    from talos.skills import discover_skills
+
+    found = discover_skills()
+    if not found:
+        console.print("[dim]no skills yet — create .talos/skills/<name>/SKILL.md[/]")
+        return
+    table = Table(title="🎒 Skills")
+    table.add_column("name", style="cyan")
+    table.add_column("description")
+    for s in found:
+        table.add_row(s.name, s.description)
+    console.print(table)
+
+
+@app.command()
+def commands() -> None:
+    """⌨️  List custom slash commands (.talos/commands/*.md)."""
+    from talos.commands import custom_commands
+
+    found = custom_commands()
+    if not found:
+        console.print("[dim]no custom commands yet — create .talos/commands/<name>.md[/]")
+        return
+    for name, path in found.items():
+        console.print(f"  [cyan]{name}[/] — {path}")
+
+
+@app.command()
 def version() -> None:
     """🏷️  Print the Talos version."""
     console.print(f"🤖 talos [bold cyan]{__version__}[/]")
