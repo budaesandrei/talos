@@ -102,6 +102,66 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+class _SlashCompleter:
+    """⌨️ TAB completion for slash commands — only at the start of a line."""
+
+    def get_completions(self, document, complete_event):
+        from prompt_toolkit.completion import Completion
+
+        from talos.commands import BUILTINS, custom_commands
+
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return
+        for cmd in sorted(set(BUILTINS) | set(custom_commands())):
+            if cmd.startswith(text):
+                yield Completion(cmd, start_position=-len(text))
+
+
+class _PromptPump:
+    """⌨️→📬 prompt_toolkit edition of the stdin pump (real terminals).
+
+    Same contract as _StdinPump (lines land in .queue, EOF → None), but
+    the user gets a persistent editable prompt at the bottom with TAB
+    completion for slash commands, while agent output prints above it
+    (prompt_toolkit's patch_stdout does that part).
+    """
+
+    prompt_text = "you › "
+
+    def __init__(self):
+        self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+        self.eof = False
+        self.fancy = True
+        self._task = asyncio.create_task(self._loop())
+
+    async def _loop(self) -> None:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.completion import Completer
+
+        # tiny adapter: our duck-typed completer → prompt_toolkit's ABC
+        completer = type(
+            "C", (Completer,), {"get_completions": _SlashCompleter.get_completions}
+        )()
+        session = PromptSession(completer=completer, complete_while_typing=True)
+        while True:
+            try:
+                line = await session.prompt_async(self.prompt_text)
+            except EOFError:
+                await self.queue.put(None)
+                return
+            except KeyboardInterrupt:
+                continue  # clear the line, keep the session
+            await self.queue.put(line)
+
+
+def make_pump():
+    """Fancy prompt on real terminals; plain thread pump for pipes/tests."""
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return _PromptPump()
+    return _StdinPump()
+
+
 class _StdinPump:
     """⌨️→📬 One background thread owns stdin for the whole session.
 
@@ -115,6 +175,7 @@ class _StdinPump:
     def __init__(self):
         self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
         self.eof = False  # set once stdin closes (None sentinel seen)
+        self.fancy = False
         self._loop = asyncio.get_running_loop()
         threading.Thread(target=self._pump, daemon=True).start()
 
@@ -643,7 +704,16 @@ async def repl(
       anything else                → 📨 queued, handled right after
     """
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
-    pump = _StdinPump()  # the sole stdin reader from here on
+    pump = make_pump()  # the sole stdin reader from here on
+
+    if pump.fancy:
+        # output prints ABOVE the persistent bottom prompt
+        from prompt_toolkit.patch_stdout import patch_stdout
+
+        stdout_ctx = patch_stdout(raw=True)
+        stdout_ctx.__enter__()
+    else:
+        stdout_ctx = None
 
     print_banner(
         console,
@@ -719,7 +789,8 @@ async def repl(
             console.print("[dim]bye 👋[/]")
             break
 
-        console.print("[bold cyan]you ›[/] ", end="")
+        if not pump.fancy:  # the fancy pump draws its own prompt
+            console.print("[bold cyan]you ›[/] ", end="")
         try:
             line = await pump.queue.get()
         except KeyboardInterrupt:
@@ -731,8 +802,14 @@ async def repl(
         stripped = line.strip()
         if not stripped:
             continue
+        if len(stripped) > 1500:
+            # 📋 don't re-echo a wall of pasted text — acknowledge it
+            console.print(f"[dim]📋 pasted {len(stripped):,} chars[/]")
         if not await handle_line(stripped):
             break
+
+    if stdout_ctx is not None:
+        stdout_ctx.__exit__(None, None, None)
 
 async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
     if name == "/help":
