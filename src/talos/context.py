@@ -77,5 +77,14 @@ def build_system_prompt() -> str:
         except Exception:
             pass
 
+    if settings.think:
+        parts.append(
+            "## Think mode 💭\n"
+            "Before your final answer, reason step by step inside a single "
+            "<thinking>…</thinking> block: restate the goal, consider "
+            "approaches, note risks. Then give your answer OUTSIDE the block. "
+            "Keep the thinking concise."
+        )
+
     parts.append(environment_info())
     return "\n\n".join(parts)

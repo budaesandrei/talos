@@ -1,0 +1,4 @@
+.talos/
+.git/
+.venv/
+__pycache__/

@@ -72,6 +72,7 @@ from talos.sessions import (
     save_session,
     set_session_meta,
 )
+from talos.thinking import ThinkSplitter
 from talos.tools import get_tools
 
 console = Console()
@@ -578,6 +579,11 @@ class Runtime:
             # runs even on cancellation — history survives a forced stop
             close_stream()
             self.status.stop()
+            # 💭 strip thinking blocks from saved messages (shown, not stored)
+            for m in collected:
+                if isinstance(m, AIMessage) and isinstance(m.content, str) \
+                        and "<thinking>" in m.content.lower():
+                    m.content = ThinkSplitter.strip(m.content)
             self.messages.extend(collected)
             save_session(self.session_id, self.messages)
             set_session_meta(self.session_id, usage=self.usage, model=self.model_name)
@@ -1200,6 +1206,10 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         await rt.init_workspace()
     elif name == "/learn":
         await rt.learn_skill()
+    elif name == "/think":
+        settings.think = not settings.think
+        rt._rebuild_graph()  # think instruction lives in the system prompt
+        console.print(f"[dim]💭 think mode {'on' if settings.think else 'off'}[/]")
     elif name == "/compact":
         did = await rt.maybe_compact(force=True)
         if not did:

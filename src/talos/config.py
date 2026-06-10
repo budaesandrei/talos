@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     compact_at: float = 0.70
     keep_recent: int = 6
 
+    # 💭 Think mode: ask the model to reason in a <thinking> scratchpad
+    # before answering (works on ANY model, not just reasoning models).
+    # Rendered dim and never saved to history. /think toggles it live.
+    think: bool = False
+
     # 🧠 Reasoning effort for thinking models (o-series, deepseek-r1,
     # claude with extended thinking via compat, …): low | medium | high.
     # Leave unset for non-reasoning models — providers reject unknown params.

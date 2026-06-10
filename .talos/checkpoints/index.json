@@ -1,0 +1,57 @@
+[
+ {
+  "id": "183953-1",
+  "turn": 1,
+  "label": "hi",
+  "tree": "9c289366e629c71f7a7829511ab59475776713f5",
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "hi",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "64fb6331-206b-4dde-a297-efcaf4e0b14e"
+    }
+   },
+   {
+    "type": "ai",
+    "data": {
+     "content": "Ah, I see now.\nLine 0: detail detail detail\nLine 1: detail detail detail\nLine 2: detail detail detail\nLine 3: detail detail detail\nLine 4: detail detail detail\nLine 5: detail detail detail\nLine 6: detail detail detail\nLine 7: detail detail detail\nLine 8: detail detail detail\nLine 9: detail detail detail\nLine 10: detail detail detail\nLine 11: detail detail detail\nLine 12: detail detail detail\nLine 13: detail detail detail\nLine 14: detail detail detail\nLine 15: detail detail detail\nLine 16: detail detail detail\nLine 17: detail detail detail\nLine 18: detail detail detail\nLine 19: detail detail detail\nLine 20: detail detail detail\nLine 21: detail detail detail\nLine 22: detail detail detail\nLine 23: detail detail detail\nLine 24: detail detail detail\nLine 25: detail detail detail\nLine 26: detail detail detail\nLine 27: detail detail detail\nLine 28: detail detail detail\nLine 29: detail detail detail\nLine 30: detail detail detail\nLine 31: detail detail detail\nLine 32: detail detail detail\nLine 33: detail detail detail\nLine 34: detail detail detail\nLine 35: detail detail detail\nLine 36: detail detail detail\nLine 37: detail detail detail\nLine 38: detail detail detail\nLine 39: detail detail detail\nLine 40: detail detail detail\nLine 41: detail detail detail\nLine 42: detail detail detail\nLine 43: detail detail detail\nLine 44: detail detail detail\nLine 45: detail detail detail\nLine 46: detail detail detail\nLine 47: detail detail detail\nLine 48: detail detail detail\nLine 49: detail detail detail\nLine 50: detail detail detail\nLine 51: detail detail detail\nLine 52: detail detail detail\nLine 53: detail detail detail\nLine 54: detail detail detail\nLine 55: detail detail detail\nLine 56: detail detail detail\nLine 57: detail detail detail\nLine 58: detail detail detail\nLine 59: detail detail detail",
+     "additional_kwargs": {
+      "refusal": null
+     },
+     "response_metadata": {
+      "token_usage": {
+       "completion_tokens": 1,
+       "prompt_tokens": 1,
+       "total_tokens": 2,
+       "completion_tokens_details": null,
+       "prompt_tokens_details": null
+      },
+      "model_provider": "openai",
+      "model_name": "mock",
+      "system_fingerprint": null,
+      "id": "1",
+      "finish_reason": "stop",
+      "logprobs": null
+     },
+     "type": "ai",
+     "name": null,
+     "id": "lc_run--019eb2d5-715e-7752-887f-64a8f0d23da3-0",
+     "tool_calls": [],
+     "invalid_tool_calls": [],
+     "usage_metadata": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "total_tokens": 2,
+      "input_token_details": {},
+      "output_token_details": {}
+     }
+    }
+   }
+  ]
+ }
+]

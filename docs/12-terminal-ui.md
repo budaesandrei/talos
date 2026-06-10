@@ -46,6 +46,16 @@ repaints; and ordering matters — the banner's animation must finish
 *before* the prompt (and `patch_stdout`) start, or every frame re-prints
 as a separate block.
 
+**Flicker-free streaming** (M45): tokens print **append-only** — we never
+repaint the growing buffer. rich.Live repainting was the bug behind both
+the flicker and the "top 3 lines duplicated ×30": once an answer is taller
+than the terminal, Live can't erase what scrolled into scrollback, so each
+repaint re-emitted the visible top. Now we stream plain text, then
+re-render as markdown only when the whole answer still fits on screen
+(so the cursor-up clear is reliable) — otherwise the plain stream stands.
+💭 think mode splits a <thinking> block (dim, shown live, stripped before
+save) from the answer, handling tags split across token chunks.
+
 **Conversation chrome** (M29): the user's line is a golden `→` with the
 input text warm-highlighted and a ▮ block cursor (`CursorShape.BLOCK`);
 the agent answers under a `▌⚒ talos · model` header — that bar/header

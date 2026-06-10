@@ -19,6 +19,7 @@ BUILTINS = {
     "/mermaid": "open mermaid diagrams from the last reply in the browser",
     "/usage": "show token usage (session + all-time)",
     "/compact": "🗜️ fold older turns into a summary now",
+    "/think": "💭 toggle think mode (reason before answering)",
     "/learn": "🧪 distill the last task into a reusable skill (verified)",
     "/init": "🗂️ survey the project and write a starter TALOS.md",
     "/rewind": "⏪ jump back to a checkpoint (chat/files/both)",
