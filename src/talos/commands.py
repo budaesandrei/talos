@@ -19,6 +19,7 @@ BUILTINS = {
     "/mermaid": "open mermaid diagrams from the last reply in the browser",
     "/usage": "show token usage (session + all-time)",
     "/models": "list the provider's models, switch the active one",
+    "/plan": "🗺️ plan before doing: /plan <task> (AI-DLC style)",
     "/exit": "quit (also /quit)",
 }
 
@@ -62,6 +63,8 @@ def dispatch(line: str) -> tuple[str, str]:
     name, _, args = line.partition(" ")
     if name in {"/exit", "/quit"}:
         return "builtin", "/exit"
+    if name == "/plan":
+        return "plan", args.strip()
     if name in BUILTINS:
         return "builtin", name
 

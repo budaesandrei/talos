@@ -54,6 +54,12 @@ from talos.mcp import load_mcp_tools
 from talos.mermaid import ascii_render, extract_mermaid, open_in_browser
 from talos.models import estimate_cost
 from talos.permissions import PermissionGate
+from talos.planning import (
+    ELABORATION_PROMPT,
+    construct_prompt,
+    is_ready,
+    save_plan,
+)
 from talos.sessions import (
     get_session_meta,
     latest_session_id,
@@ -521,6 +527,75 @@ async def _gather_mcp_tools() -> list:
     return tools
 
 
+async def run_plan(rt: Runtime, pump, task: str) -> None:
+    """🗺️ The /plan flow: elaborate (read-only) → human gate → construct."""
+    from talos.context import environment_info
+    from talos.tools.task_tool import _resolve_tools
+
+    if not task:
+        console.print("[yellow]what should we plan? ›[/] ", end="")
+        task = (await pump.queue.get() or "").strip()
+        if not task:
+            return
+
+    # 🔍 elaboration happens on a read-only graph — planning can't mutate
+    planner = build_agent_graph(
+        llm=build_llm(rt.model_name),
+        tools=_resolve_tools([]),  # default read-only set
+        system_prompt=ELABORATION_PROMPT + "\n\n" + environment_info(),
+        gate=PermissionGate(approver=None),
+    )
+    convo: list[BaseMessage] = list(rt.messages) + [
+        HumanMessage(content=f"Plan this task: {task}")
+    ]
+
+    plan_text = ""
+    for _round in range(4):  # initial + up to 3 clarification rounds
+        rt.status.set("🗺️ elaborating…")
+        try:
+            result = await planner.ainvoke(
+                {"messages": convo},
+                config={"recursion_limit": settings.max_iterations},
+            )
+        except Exception as exc:
+            rt.status.stop()
+            console.print(f"[red]planning failed: {exc}[/]")
+            return
+        rt.status.stop()
+        reply = result["messages"][-1]
+        plan_text = get_message_text(reply)
+        convo = list(result["messages"])
+        console.print(Panel(Markdown(plan_text), title="🗺️ plan", border_style="cyan"))
+
+        if is_ready(plan_text):
+            break
+        # ❓ mob elaboration: the planner asked questions — answer them
+        console.print("[yellow]answers (or 'skip' to force a plan) ›[/] ", end="")
+        answer = (await pump.queue.get() or "").strip()
+        if answer.lower() == "skip":
+            convo.append(HumanMessage(
+                content="No more answers. Make reasonable assumptions, state "
+                "them in the plan, and finish it now."))
+        else:
+            convo.append(HumanMessage(content=answer))
+
+    path = save_plan(plan_text)
+    console.print(f"[dim]🗺️ saved to {path}[/]")
+
+    # 🚦 the human gate
+    console.print("[yellow]execute? \[y]es · \[r]evise · \[n]ot now ›[/] ", end="")
+    verdict = (await pump.queue.get() or "").strip().lower()
+    if verdict.startswith("y"):
+        # 🔨 construct phase = a normal turn: full tools, gate, interjections
+        rt.inbox.insert(0, construct_prompt(plan_text))
+    elif verdict.startswith("r"):
+        console.print("[yellow]what should change? ›[/] ", end="")
+        note = (await pump.queue.get() or "").strip()
+        rt.inbox.insert(0, f"/plan {task}\n(revision note: {note})")
+    else:
+        console.print(f"[dim]parked — it's in {path} when you want it[/]")
+
+
 async def run_once(prompt: str, model: str | None = None, yolo: bool = False) -> None:
     """⚡ One-shot mode: single turn, then exit (good for scripts/pipes).
 
@@ -596,6 +671,9 @@ async def repl(
             return True
         if action == "unknown":
             console.print(f"[red]unknown command {payload}[/] — try /help")
+            return True
+        if action == "plan":
+            await run_plan(rt, pump, payload)
             return True
         if action == "prompt":
             console.print("[dim]⌨️  expanded custom command[/]")
