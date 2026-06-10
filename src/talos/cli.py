@@ -78,9 +78,10 @@ def sessions() -> None:
         return
     table = Table(title="💾 Sessions")
     table.add_column("id", style="cyan")
+    table.add_column("title")
     table.add_column("messages", justify="right")
     for row in rows:
-        table.add_row(row["id"], str(row["messages"]))
+        table.add_row(row["id"], row.get("title") or "[dim]…[/]", str(row["messages"]))
     console.print(table)
     console.print("[dim]resume with: talos chat -r <id>   (or -r latest)[/]")
 

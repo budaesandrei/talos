@@ -81,3 +81,38 @@ async def test_usage_is_tracked_per_turn_and_session(tmp_path, monkeypatch):
     assert rt.usage["input"] == 100
     assert rt.usage["total"] == 120
     assert rt.usage["turns"] == 1
+
+
+async def test_session_gets_llm_title_and_usage_persists(tmp_path, monkeypatch):
+    import asyncio
+
+    from langchain_core.messages import AIMessage
+
+    from talos.runtime import runner
+    from talos.sessions import all_time_usage, get_session_meta, list_sessions
+    from tests.fakes import FakeToolCallingModel
+
+    monkeypatch.chdir(tmp_path)
+    calls = {"n": 0}
+
+    def fake_llm(model=None):
+        # 1st build_llm → the conversation model; later ones → title model.
+        # (pydantic copies the responses list, so they can't share one.)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return FakeToolCallingModel(responses=[
+                AIMessage(content="hi", usage_metadata={
+                    "input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
+            ])
+        return FakeToolCallingModel(responses=[AIMessage(content="rename files project")])
+
+    monkeypatch.setattr(runner, "build_llm", fake_llm)
+    rt = runner.Runtime(interactive=False)
+    await rt.turn("help me rename my files")
+    await asyncio.sleep(0.05)  # let the fire-and-forget title task finish
+
+    meta = get_session_meta(rt.session_id)
+    assert meta["title"] == "rename files project"
+    assert meta["usage"]["total"] == 15
+    assert list_sessions()[0]["title"] == "rename files project"
+    assert all_time_usage()["total"] == 15

@@ -54,10 +54,12 @@ from talos.mcp import load_mcp_tools
 from talos.mermaid import ascii_render, extract_mermaid, open_in_browser
 from talos.permissions import PermissionGate
 from talos.sessions import (
+    get_session_meta,
     latest_session_id,
     load_session,
     new_session_id,
     save_session,
+    set_session_meta,
 )
 from talos.tools import get_tools
 
@@ -209,9 +211,14 @@ class Runtime:
             self.session_id = new_session_id()
             self.messages = []
         self.last_mermaid: list[str] = []  # 🧜 filled after each reply
+        meta = get_session_meta(self.session_id)
+        self.title: str = meta.get("title", "")
         # 📊 running totals from AIMessage.usage_metadata (LangChain
-        # normalizes every provider's usage block into this one shape)
-        self.usage = {"input": 0, "output": 0, "total": 0, "turns": 0}
+        # normalizes every provider's usage block into this one shape).
+        # Resuming restores the session's lifetime usage from the index.
+        self.usage = meta.get("usage") or {
+            "input": 0, "output": 0, "total": 0, "turns": 0
+        }
 
     # ── 🛡️ permission prompt (pauses the spinner) ───────────────────────
     async def _ask_permission(self, tool_name: str, args: dict) -> str:
@@ -330,6 +337,10 @@ class Runtime:
             self.status.stop()
             self.messages.extend(collected)
             save_session(self.session_id, self.messages)
+            set_session_meta(self.session_id, usage=self.usage)
+            if not self.title and self.messages:
+                # 🏷️ fire-and-forget: name the session for the resume list
+                asyncio.get_running_loop().create_task(self._make_title())
 
         final = ""
         for msg in reversed(collected):
@@ -357,6 +368,30 @@ class Runtime:
                 f"  ·  session {s['total']:,}[/]"
             )
         return final
+
+    async def _make_title(self) -> None:
+        """🏷️ LLM-generated session title, so 'talos sessions' reads like a
+        list of conversations instead of a list of timestamps."""
+        try:
+            first_user = next(
+                (get_message_text(m) for m in self.messages
+                 if isinstance(m, HumanMessage)), ""
+            )
+            reply = await build_llm().ainvoke(
+                [
+                    SystemMessage(
+                        content="Summarize this conversation topic in 3-6 "
+                        "plain words. No quotes, no punctuation."
+                    ),
+                    HumanMessage(content=first_user[:2000]),
+                ]
+            )
+            title = get_message_text(reply).strip().strip('"')[:60]
+            if title:
+                self.title = title
+                set_session_meta(self.session_id, title=title)
+        except Exception:
+            pass  # cosmetic feature — never disturb the session
 
     # ── 🎙️ interjections: lines typed while the agent works ─────────────
     async def interject(self, text: str, turn_task: "asyncio.Task") -> None:
@@ -583,11 +618,18 @@ def _run_builtin(name: str, rt: Runtime) -> None:
 
         console.print(load_memory() or "[dim](memory is empty)[/]")
     elif name == "/usage":
+        from talos.sessions import all_time_usage
+
         u = rt.usage
+        a = all_time_usage()
         console.print(
-            f"📊 session usage — [cyan]{u['turns']}[/] turn(s) · "
+            f"📊 this session — [cyan]{u['turns']}[/] turn(s) · "
             f"↑ [cyan]{u['input']:,}[/] in · ↓ [cyan]{u['output']:,}[/] out · "
             f"[bold cyan]{u['total']:,}[/] total tokens"
+        )
+        console.print(
+            f"[dim]   all time — {a['sessions']} session(s) · {a['turns']} turns · "
+            f"{a['total']:,} total tokens[/]"
         )
     elif name == "/mermaid":
         if rt.last_mermaid:
