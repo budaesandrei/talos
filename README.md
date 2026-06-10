@@ -20,6 +20,10 @@ Every feature category a modern agent has, implemented minimally:
 | 📇 Models, usage & cost | `models.py` | [10 — models & cost](docs/10-models-and-cost.md) |
 | 🗺️ Plan mode (AI-DLC) | `planning.py` | [11 — plan mode](docs/11-plan-mode.md) |
 | 🖥️ TUI (menu, streaming, banner) | `tui.py`, `runtime/` | [12 — terminal UI](docs/12-terminal-ui.md) |
+| ♾️ Compaction + graph memory | `compaction.py`, `graph_memory.py` | [13 — long-running](docs/13-long-running.md) |
+| ⏪ Checkpoints · verifier · skill synthesis | `checkpoints.py`, `skill_synthesis.py` | [14 — time travel](docs/14-time-travel.md) |
+| 🔄 /evolve lifecycle | `evolve.py` | [15 — evolve](docs/15-evolve.md) |
+| 🔗 Cross-agent linking · 👥 teams · 👁 vision · 🚧 policy · 🔭 tracing | various | see docs |
 
 ## 🚀 Quickstart
 
@@ -101,6 +105,9 @@ git checkout <hash>      # time-travel to any milestone and poke around
 | M17–M20 | usage tracking, pydantic models, 8-bit banner, interjections |
 | M21–M25 | environment/shell awareness, session titles, /models + cost, /plan (AI-DLC), reasoning |
 | M26–M28 | prompt_toolkit input, animated banner, kiro-style inline command menu |
+| M29–M32 | conversation chrome, /models hang+pricing fixes, Textual TUI |
+| M33–M38 | auto-compaction, GraphRAG memory, time-travel /rewind, verifier, policy+sandbox, OTel tracing |
+| M39–M44 | cross-agent linking, skill synthesis, parallel teams, vision, /init, /evolve ouroboros |
 
 Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
 
