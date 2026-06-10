@@ -36,6 +36,16 @@ repaints; and ordering matters — the banner's animation must finish
 *before* the prompt (and `patch_stdout`) start, or every frame re-prints
 as a separate block.
 
+**Conversation chrome** (M29): the user's line is a golden `→` with the
+input text warm-highlighted and a ▮ block cursor (`CursorShape.BLOCK`);
+the agent answers under a `▌⚒ talos · model` header — that bar/header
+pair is the user/agent split. Session stats (total tokens · $ cost,
+3 decimals, costs coalesced to 0 when a side is unknown) live in the
+prompt's **rprompt** — pinned to the right edge of the input line,
+always current, never printed into the transcript. The lesson: status
+belongs in *chrome* (re-rendered UI), history belongs in the
+*transcript* — mixing them is what makes CLI conversations unreadable.
+
 **The banner** (`banner.py`): half-block pixel art (each cell = two
 pixels), centered, with a molten-bronze gradient sweep on a 24fps
 `rich.Live` — skipped when stdout isn't a terminal so pipes stay clean.

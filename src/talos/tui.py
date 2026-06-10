@@ -30,6 +30,9 @@ MENU_ROWS = 5  # the fixed window height — it never grows, it scrolls
 
 STYLE = Style.from_dict(
     {
+        "": "#f0e6d2",                          # ✍️ input text: warm highlight
+        "prompt": "bold #ffd75f",               # → the golden arrow
+        "rprompt": "#6c6c6c",                   # 📊 stats pinned to the right
         "bottom-toolbar": "noreverse",          # kill the default reverse video
         "menu-row": "#9e9e9e",
         "menu-sel": "bg:#ff5fd7 #1c1c1c bold",  # 💗 the pink bar
@@ -102,9 +105,15 @@ class CommandMenu:
         return FormattedText(rows)
 
 
-def build_session():
-    """A PromptSession with the inline menu wired in."""
+def build_session(stats=None):
+    """A PromptSession with the inline menu wired in.
+
+    ``stats``: optional zero-arg callable returning a short string (session
+    tokens · cost). It renders as the *right prompt* — pinned to the right
+    edge of the input line, always current, never polluting the transcript.
+    """
     from prompt_toolkit import PromptSession
+    from prompt_toolkit.cursor_shapes import CursorShape
 
     menu = CommandMenu()
     kb = KeyBindings()
@@ -141,9 +150,12 @@ def build_session():
     # …but an exact match falls through to normal Enter (submits the line).
 
     session = PromptSession(
+        message=[("class:prompt", "→ ")],
         key_bindings=kb,
         style=STYLE,
+        cursor=CursorShape.BLOCK,  # ▮ the filled-block cursor
         bottom_toolbar=lambda: menu.render(session.default_buffer.text),
+        rprompt=(lambda: [("class:rprompt", stats() or "")]) if stats else None,
     )
     # any edit resets the highlight to the top hit
     session.default_buffer.on_text_changed += lambda _buf: setattr(menu, "index", 0)

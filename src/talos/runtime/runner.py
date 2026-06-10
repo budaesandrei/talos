@@ -111,21 +111,20 @@ class _PromptPump:
     (prompt_toolkit's patch_stdout does that part).
     """
 
-    prompt_text = "you › "
-
-    def __init__(self):
+    def __init__(self, stats=None):
         self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
         self.eof = False
         self.fancy = True
+        self._stats = stats
         self._task = asyncio.create_task(self._loop())
 
     async def _loop(self) -> None:
         from talos.tui import build_session
 
-        session = build_session()  # 🪟 inline command menu, no popup
+        session = build_session(stats=self._stats)  # 🪟 menu + right-edge stats
         while True:
             try:
-                line = await session.prompt_async(self.prompt_text)
+                line = await session.prompt_async()
             except EOFError:
                 await self.queue.put(None)
                 return
@@ -134,10 +133,10 @@ class _PromptPump:
             await self.queue.put(line)
 
 
-def make_pump():
+def make_pump(stats=None):
     """Fancy prompt on real terminals; plain thread pump for pipes/tests."""
     if sys.stdin.isatty() and sys.stdout.isatty():
-        return _PromptPump()
+        return _PromptPump(stats)
     return _StdinPump()
 
 
@@ -283,14 +282,26 @@ class Runtime:
 
     def _usage_suffix(self) -> str:
         """The 'how much have I spent' tail on the spinner line."""
+        line = self.stats_line()
+        return f" · {line}" if line else ""
+
+    def stats_line(self) -> str:
+        """📊 'N tok · $X.XXX' — rendered at the right edge of the prompt."""
         total = self.usage["total"]
         if not total:
             return ""
-        suffix = f" · {total:,} tok"
+        text = f"{total:,} tok"
         cost = self.session_cost()
         if cost is not None:
-            suffix += f" · ${cost:.4f}"
-        return suffix
+            text += f" · ${cost:.3f}"
+        return text
+
+    def _header(self) -> str:
+        """⚒ the agent's turn header — the visual user/agent split."""
+        parts = [f"[bold #c97f2e]▌⚒ talos[/]", f"[dim]{self.model_name}[/]"]
+        if settings.reasoning_effort:
+            parts.append(f"[dim]🧠 {settings.reasoning_effort}[/]")
+        return "  ".join(parts)
 
     # ── 🛡️ permission prompt (pauses the spinner) ───────────────────────
     async def _ask_permission(self, tool_name: str, args: dict) -> str:
@@ -334,6 +345,13 @@ class Runtime:
         live: Live | None = None
         prefix_printed = False
         reasoning_open = False
+        header_printed = False
+
+        def ensure_header() -> None:
+            nonlocal header_printed
+            if not header_printed:
+                console.print(self._header(), highlight=False)
+                header_printed = True
 
         def close_stream() -> None:
             nonlocal live, buffer, prefix_printed, reasoning_open
@@ -369,6 +387,7 @@ class Runtime:
                         ) or ""
                         if thought:
                             self.status.stop()
+                            ensure_header()
                             if not reasoning_open:
                                 console.print("[dim italic]🧠 thinking[/]")
                                 reasoning_open = True
@@ -387,7 +406,7 @@ class Runtime:
                         if settings.markdown:
                             buffer += text
                             if live is None:
-                                console.print("[bold magenta]talos ›[/]")
+                                ensure_header()
                                 live = Live(
                                     console=console,
                                     refresh_per_second=8,
@@ -397,7 +416,7 @@ class Runtime:
                             live.update(Markdown(buffer))
                         else:
                             if not prefix_printed:
-                                console.print("[bold magenta]talos ›[/] ", end="")
+                                ensure_header()
                                 prefix_printed = True
                             print(text, end="", flush=True)
 
@@ -410,6 +429,7 @@ class Runtime:
                             self._render_side_effects(msg)
                         if node == "tools":
                             # back to the model for the next think step
+                            header_printed = False
                             self.status.set(
                                 f"{next(THINKING)}…{self._usage_suffix()}"
                             )
@@ -456,15 +476,7 @@ class Runtime:
                 "type /mermaid to open in your browser[/]"
             )
 
-        # 📊 per-turn usage footer
-        if settings.show_usage and self._turn_usage["total"]:
-            t, s = self._turn_usage, self.usage
-            cost = self.session_cost()
-            cost_part = f" · ${cost:.4f}" if cost is not None else ""
-            console.print(
-                f"[dim]📊 ↑{t['input']:,} ↓{t['output']:,} tok"
-                f"  ·  session {s['total']:,}{cost_part}[/]"
-            )
+        console.print()  # breathe: one blank line closes the agent block
         return final
 
     async def _make_title(self) -> None:
@@ -696,7 +708,7 @@ async def repl(
         title=rt.title,
     )
 
-    pump = make_pump()  # the sole stdin reader from here on
+    pump = make_pump(stats=rt.stats_line)  # sole stdin reader + 📊 rprompt
     if pump.fancy:
         # output prints ABOVE the persistent bottom prompt
         from prompt_toolkit.patch_stdout import patch_stdout
@@ -756,14 +768,14 @@ async def repl(
         return True
 
     if initial_prompt:
-        console.print(f"[bold cyan]you ›[/] {initial_prompt}")
+        console.print(f"[bold #ffd75f]→[/] {initial_prompt}")
         await run_turn(initial_prompt)
 
     while True:
         # 📨 first, anything the user queued while the agent was busy
         if rt.inbox:
             note = rt.inbox.pop(0)
-            console.print(f"[bold cyan]you (queued) ›[/] {note}")
+            console.print(f"[bold #ffd75f]→[/] [dim](queued)[/] {note}")
             if not await handle_line(note):
                 break
             continue
@@ -773,7 +785,7 @@ async def repl(
             break
 
         if not pump.fancy:  # the fancy pump draws its own prompt
-            console.print("[bold cyan]you ›[/] ", end="")
+            console.print("[bold #ffd75f]→[/] ", end="")
         try:
             line = await pump.queue.get()
         except KeyboardInterrupt:
@@ -808,23 +820,33 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
 
         console.print(load_memory() or "[dim](memory is empty)[/]")
     elif name == "/usage":
+        from rich.table import Table as RichTable
+
         from talos.sessions import all_time_usage
 
-        u = rt.usage
-        a = all_time_usage()
+        u, a = rt.usage, all_time_usage()
         cost = rt.session_cost()
-        cost_part = f" · [green]${cost:.4f}[/]" if cost is not None else ""
-        console.print(
-            f"📊 this session — [cyan]{u['turns']}[/] turn(s) · "
-            f"↑ [cyan]{u['input']:,}[/] in · ↓ [cyan]{u['output']:,}[/] out · "
-            f"[bold cyan]{u['total']:,}[/] total tokens{cost_part}"
+        table = RichTable(show_header=True, header_style="dim", box=None,
+                          padding=(0, 3))
+        table.add_column("")
+        table.add_column("turns", justify="right")
+        table.add_column("↑ in", justify="right")
+        table.add_column("↓ out", justify="right")
+        table.add_column("total", justify="right", style="bold cyan")
+        table.add_column("cost", justify="right", style="green")
+        table.add_row(
+            "this session", str(u["turns"]), f"{u['input']:,}",
+            f"{u['output']:,}", f"{u['total']:,}",
+            f"${cost:.3f}" if cost is not None else "·",
         )
-        all_cost = a.pop("cost", None)
-        all_cost_part = f" · ${all_cost:.4f}" if all_cost else ""
-        console.print(
-            f"[dim]   all time — {a['sessions']} session(s) · {a['turns']} turns · "
-            f"{a['total']:,} total tokens{all_cost_part}[/]"
+        table.add_row(
+            "[dim]all time[/]", f"[dim]{a['turns']}[/]",
+            f"[dim]{a['input']:,}[/]", f"[dim]{a['output']:,}[/]",
+            f"[dim]{a['total']:,}[/]",
+            f"[dim]${a['cost']:.3f}[/]" if a.get("cost") else "·",
         )
+        console.print(Panel(table, title="📊 usage", border_style="dim",
+                            title_align="left", padding=(1, 2)))
     elif name == "/models":
         from talos.models import list_models
 
