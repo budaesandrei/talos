@@ -37,3 +37,15 @@ def test_selection_wraps():
     rendered = menu.render("/")
     assert rendered  # modulo wraps instead of crashing
     assert menu.index == 0
+
+
+def test_status_state_renders_spinner_frame():
+    from talos.tui import SPINNER_FRAMES, StatusState
+
+    s = StatusState()
+    assert s.render() == ""           # idle → toolbar stays empty
+    s.text = "🤔 thinking…"
+    rendered = s.render()
+    flat = "".join(frag for _, frag in rendered)
+    assert "thinking" in flat
+    assert any(f.strip("· ✦✧") == "⚒" for f in SPINNER_FRAMES)  # ours, not dots

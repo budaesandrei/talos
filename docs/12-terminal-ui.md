@@ -30,6 +30,16 @@ flowchart LR
     S["Style classes<br/>💗 selection bar"] --> M
 ```
 
+**Status without flicker** (M30): the agent's "thinking" indicator no
+longer draws via rich while the prompt is active — two renderers fighting
+over the bottom line is exactly where flicker comes from. Instead the
+Runtime writes plain text into a shared `StatusState`, and the prompt's
+own bottom toolbar renders it (with a custom ⚒ forge spinner — sparks
+fly off the hammer), animated by `refresh_interval`. One owner of the
+screen bottom, zero flicker, and your in-flight typing never collides
+with the spinner. The menu takes the toolbar over while you're picking
+a command; the status returns when you're not.
+
 Two hard-won lessons baked into the code: key handlers that change UI
 state without changing the buffer must call `app.invalidate()` or nothing
 repaints; and ordering matters — the banner's animation must finish

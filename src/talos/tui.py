@@ -20,6 +20,8 @@ this — a prompt with a self-drawn toolbar gets you 90% of the elegance
 at 10% of the complexity.
 """
 
+import time
+
 from prompt_toolkit.application import get_app
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText
@@ -27,6 +29,24 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 
 MENU_ROWS = 5  # the fixed window height — it never grows, it scrolls
+
+# ⚒ the forge spinner — sparks fly off the hammer (ours, not kiro's dots)
+SPINNER_FRAMES = ("⚒      ", "⚒ ✦    ", "⚒ ·✦   ", "⚒  ·✦  ", "⚒   ·✦ ", "⚒    ·✧", "⚒     ·")
+
+
+class StatusState:
+    """Shared mutable status: the Runtime writes .text, the prompt's
+    toolbar renders it. One owner of the screen bottom = zero flicker —
+    the agent's 'thinking' line and your input line never fight again."""
+
+    def __init__(self):
+        self.text = ""
+
+    def render(self):
+        if not self.text:
+            return ""
+        frame = SPINNER_FRAMES[int(time.monotonic() * 6) % len(SPINNER_FRAMES)]
+        return FormattedText([("class:status", f" {frame} {self.text}")])
 
 STYLE = Style.from_dict(
     {
@@ -39,6 +59,7 @@ STYLE = Style.from_dict(
         "menu-desc": "#6c6c6c",
         "menu-desc-sel": "bg:#ff5fd7 #3a3a3a",
         "menu-more": "#5f5f5f italic",
+        "status": "#c97f2e italic",             # ⚒ molten-bronze status line
     }
 )
 
@@ -105,12 +126,16 @@ class CommandMenu:
         return FormattedText(rows)
 
 
-def build_session(stats=None):
+def build_session(stats=None, status: StatusState | None = None):
     """A PromptSession with the inline menu wired in.
 
     ``stats``: optional zero-arg callable returning a short string (session
     tokens · cost). It renders as the *right prompt* — pinned to the right
     edge of the input line, always current, never polluting the transcript.
+
+    ``status``: a StatusState; while the agent works, its text renders in
+    the bottom toolbar (with the ⚒ forge spinner). The toolbar shows the
+    command menu when you're typing a slash command, the status otherwise.
     """
     from prompt_toolkit import PromptSession
     from prompt_toolkit.cursor_shapes import CursorShape
@@ -149,12 +174,21 @@ def build_session(stats=None):
         _accept(event)
     # …but an exact match falls through to normal Enter (submits the line).
 
+    def toolbar():
+        rendered = menu.render(session.default_buffer.text)
+        if rendered:
+            return rendered  # the menu wins while you're picking a command
+        if status is not None:
+            return status.render()
+        return ""
+
     session = PromptSession(
         message=[("class:prompt", "→ ")],
         key_bindings=kb,
         style=STYLE,
-        cursor=CursorShape.BLOCK,  # ▮ the filled-block cursor
-        bottom_toolbar=lambda: menu.render(session.default_buffer.text),
+        cursor=CursorShape.BLOCK,    # ▮ the filled-block cursor
+        bottom_toolbar=toolbar,
+        refresh_interval=0.4,        # ticks the spinner animation
         rprompt=(lambda: [("class:rprompt", stats() or "")]) if stats else None,
     )
     # any edit resets the highlight to the top hit

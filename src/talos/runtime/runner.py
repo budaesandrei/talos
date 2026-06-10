@@ -112,16 +112,19 @@ class _PromptPump:
     """
 
     def __init__(self, stats=None):
+        from talos.tui import StatusState
+
         self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
         self.eof = False
         self.fancy = True
+        self.status_state = StatusState()  # ⚒ rendered in the prompt's toolbar
         self._stats = stats
         self._task = asyncio.create_task(self._loop())
 
     async def _loop(self) -> None:
         from talos.tui import build_session
 
-        session = build_session(stats=self._stats)  # 🪟 menu + right-edge stats
+        session = build_session(stats=self._stats, status=self.status_state)
         while True:
             try:
                 line = await session.prompt_async()
@@ -203,17 +206,30 @@ async def classify_intent(text: str) -> str:
 
 
 class _Status:
-    """Tiny wrapper around rich's spinner so we can pause it for input."""
+    """The 'agent is busy' indicator, with two backends:
+
+    - fancy mode: writes into the prompt's StatusState — the toolbar
+      renders it, prompt_toolkit owns the whole bottom of the screen,
+      and nothing flickers because nothing else repaints that region
+    - plain mode (pipes, one-shot): a rich spinner ('aesthetic', not
+      the dots every other CLI uses)
+    """
 
     def __init__(self):
         self._status = None
+        self.sink = None  # StatusState once the fancy prompt attaches
 
     def set(self, text: str) -> None:
+        if self.sink is not None:
+            self.sink.text = text
+            return
         self.stop()
-        self._status = console.status(f"[dim]{text}[/]", spinner="dots")
+        self._status = console.status(f"[dim]{text}[/]", spinner="aesthetic")
         self._status.start()
 
     def stop(self) -> None:
+        if self.sink is not None:
+            self.sink.text = ""
         if self._status is not None:
             self._status.stop()
             self._status = None
@@ -710,6 +726,8 @@ async def repl(
 
     pump = make_pump(stats=rt.stats_line)  # sole stdin reader + 📊 rprompt
     if pump.fancy:
+        rt.status.sink = pump.status_state  # ⚒ status renders in the toolbar
+    if pump.fancy:
         # output prints ABOVE the persistent bottom prompt
         from prompt_toolkit.patch_stdout import patch_stdout
 
@@ -852,7 +870,7 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
 
         rt.status.set("📇 fetching /models…")
         try:
-            found = sorted(list_models(), key=lambda m: m.id)
+            found = sorted(await asyncio.to_thread(list_models), key=lambda m: m.id)
         except Exception as exc:
             rt.status.stop()
             console.print(f"[red]could not fetch models: {exc}[/]")

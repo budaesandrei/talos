@@ -64,3 +64,15 @@ def test_string_ids_and_models_key_are_tolerated():
     assert parse_models({"models": ["gpt-4o-mini"]}, DB)[0].vision is True
     assert parse_models(["some-model"], DB)[0].id == "some-model"
     assert parse_models({"weird": True}, DB) == []
+
+
+def test_fallback_prices_when_db_unreachable(monkeypatch):
+    import talos.models as mm
+
+    monkeypatch.setattr(mm, "_db_memo", None)
+    monkeypatch.setattr(mm, "_fetch_price_db", lambda: {})
+    meta = mm.lookup("claude-sonnet-4-5")
+    assert meta["input_cost_per_token"] == 3e-6  # bundled snapshot kicked in
+    cost = mm.estimate_cost("claude-sonnet-4-5", 1000, 100)
+    assert round(cost, 4) == round(1000 * 3e-6 + 100 * 15e-6, 4)
+    monkeypatch.setattr(mm, "_db_memo", None)  # don't leak the memo

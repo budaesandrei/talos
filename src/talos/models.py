@@ -28,6 +28,22 @@ PRICES_URL = (
 CACHE_FILE = Path.home() / ".talos" / "cache" / "model_prices.json"
 CACHE_TTL = 7 * 86_400  # a week
 
+# 🧯 Bundled snapshot for when the LiteLLM db is unreachable (offline,
+# corporate proxy, …). Costs are $/token; approximate by design — the
+# fetched db wins whenever available. Update casually.
+FALLBACK_PRICES = {
+    "claude-sonnet-4-5":  {"max_input_tokens": 200000, "input_cost_per_token": 3e-6,    "output_cost_per_token": 15e-6,  "supports_vision": True},
+    "claude-opus-4-1":    {"max_input_tokens": 200000, "input_cost_per_token": 15e-6,   "output_cost_per_token": 75e-6,  "supports_vision": True},
+    "claude-haiku-4-5":   {"max_input_tokens": 200000, "input_cost_per_token": 1e-6,    "output_cost_per_token": 5e-6,   "supports_vision": True},
+    "gpt-4o":             {"max_input_tokens": 128000, "input_cost_per_token": 2.5e-6,  "output_cost_per_token": 10e-6,  "supports_vision": True},
+    "gpt-4o-mini":        {"max_input_tokens": 128000, "input_cost_per_token": 0.15e-6, "output_cost_per_token": 0.6e-6, "supports_vision": True},
+    "gpt-4.1":            {"max_input_tokens": 1047576,"input_cost_per_token": 2e-6,    "output_cost_per_token": 8e-6,   "supports_vision": True},
+    "o3":                 {"max_input_tokens": 200000, "input_cost_per_token": 2e-6,    "output_cost_per_token": 8e-6,   "supports_vision": True},
+    "deepseek-chat":      {"max_input_tokens": 65536,  "input_cost_per_token": 0.27e-6, "output_cost_per_token": 1.1e-6, "supports_vision": False},
+}
+
+_db_memo: dict | None = None  # one resolution per process
+
 
 class ModelInfo(BaseModel):
     id: str
@@ -38,11 +54,20 @@ class ModelInfo(BaseModel):
 
 
 def _price_db() -> dict:
-    """LiteLLM's pricing JSON, cached. Failure → {} (cost just hides)."""
+    """LiteLLM's pricing JSON, cached on disk + memoized in process.
+    Unreachable → bundled FALLBACK_PRICES (approximate beats absent)."""
+    global _db_memo
+    if _db_memo is not None:
+        return _db_memo
+    _db_memo = _fetch_price_db() or FALLBACK_PRICES
+    return _db_memo
+
+
+def _fetch_price_db() -> dict:
     try:
         if CACHE_FILE.is_file() and time.time() - CACHE_FILE.stat().st_mtime < CACHE_TTL:
             return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-        resp = httpx.get(PRICES_URL, timeout=15, verify=settings.verify_ssl)
+        resp = httpx.get(PRICES_URL, timeout=8, verify=settings.verify_ssl)
         resp.raise_for_status()
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         CACHE_FILE.write_text(resp.text, encoding="utf-8")
@@ -81,6 +106,9 @@ def _normalize_payload(payload) -> list[dict]:
 
 def parse_models(payload, db: dict | None = None) -> list[ModelInfo]:
     """Standard fields from /models + enrichment (OpenRouter > LiteLLM db)."""
+    db = _price_db() if db is None else db  # 🐛 resolve ONCE — resolving
+    # per-model meant one (possibly 15s-timeout) fetch attempt per row,
+    # which is exactly how '/models hangs' bugs are born
     out = []
     for entry in _normalize_payload(payload):
         mid = entry.get("id") or entry.get("name", "")
