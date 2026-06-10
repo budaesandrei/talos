@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 from talos.graph.state import AgentState
 from talos.permissions import PermissionGate
 from talos.policy import check_action
+from talos.tracing import set_span_attrs, span
 
 
 STOP_NOTICE = (
@@ -47,9 +48,19 @@ def build_agent_graph(
 
     async def agent_node(state: AgentState) -> dict:
         """🧠 Think: one LLM call over the full conversation."""
-        response = await llm_with_tools.ainvoke(
-            [SystemMessage(content=system_prompt), *state.messages]
-        )
+        with span("gen_ai.chat", **{"gen_ai.operation.name": "chat"}) as s:
+            response = await llm_with_tools.ainvoke(
+                [SystemMessage(content=system_prompt), *state.messages]
+            )
+            um = getattr(response, "usage_metadata", None) or {}
+            set_span_attrs(
+                s,
+                **{
+                    "gen_ai.usage.input_tokens": um.get("input_tokens"),
+                    "gen_ai.usage.output_tokens": um.get("output_tokens"),
+                    "gen_ai.response.tool_calls": len(response.tool_calls or []),
+                },
+            )
         return {"messages": [response]}
 
     async def tools_node(state: AgentState) -> dict:
@@ -87,10 +98,13 @@ def build_agent_graph(
                 # 🛡️ Denial is information: the model sees it and can adapt.
                 output = reason
             else:
-                try:
-                    output = await tool.ainvoke(call["args"])
-                except Exception as exc:  # errors go back to the model, not the user
-                    output = f"Error: {type(exc).__name__}: {exc}"
+                with span("execute_tool",
+                          **{"gen_ai.operation.name": "execute_tool",
+                             "gen_ai.tool.name": call["name"]}):
+                    try:
+                        output = await tool.ainvoke(call["args"])
+                    except Exception as exc:  # errors go to the model, not the user
+                        output = f"Error: {type(exc).__name__}: {exc}"
 
             results.append(
                 ToolMessage(

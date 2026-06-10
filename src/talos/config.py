@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # tables, syntax-highlighted code). Set false for raw text streaming.
     markdown: bool = True
 
+    # 🔭 Emit OpenTelemetry spans (GenAI semantic conventions). Off = zero
+    # overhead. Set OTEL_EXPORTER_OTLP_ENDPOINT to ship to a collector.
+    trace: bool = False
+
     # 📦 Shell execution sandbox: "off" | "docker". docker runs each shell
     # command in a throwaway network-isolated container (zero overhead off).
     sandbox: str = "off"

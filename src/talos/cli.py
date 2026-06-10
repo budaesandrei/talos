@@ -41,8 +41,14 @@ def chat(
         None, "--resume", "-r",
         help="💾 Resume a saved session: an ID from 'talos sessions', or 'latest'.",
     ),
+    trace: bool = typer.Option(False, "--trace", help="🔭 Emit OpenTelemetry spans."),
 ) -> None:
     """💬 Chat with Talos (interactive by default)."""
+    if trace:
+        settings.trace = True
+    from talos.tracing import init_tracing
+
+    init_tracing()
     from talos.runtime.runner import repl, run_once
 
     if no_interactive:

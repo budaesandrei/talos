@@ -25,6 +25,7 @@ dependencies = [
 mcp = ["langchain-mcp-adapters>=0.1"]
 tui = ["textual>=1.0"]
 memory = ["kuzu>=0.4", "sqlite-vec>=0.1", "igraph>=0.11"]
+trace = ["opentelemetry-sdk>=1.20", "opentelemetry-exporter-otlp>=1.20"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pexpect>=4.9"]
 
 [project.scripts]
