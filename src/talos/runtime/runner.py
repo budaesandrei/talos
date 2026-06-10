@@ -569,6 +569,12 @@ class Runtime:
             self.messages.extend(collected)
             save_session(self.session_id, self.messages)
             set_session_meta(self.session_id, usage=self.usage, model=self.model_name)
+            try:  # ⏪ time-travel checkpoint (chat + file snapshot)
+                from talos.checkpoints import save_checkpoint
+
+                save_checkpoint(self.usage["turns"], user_input, self.messages)
+            except Exception:
+                pass
             if not self.title and self.messages:
                 # 🏷️ fire-and-forget: name the session for the resume list
                 asyncio.get_running_loop().create_task(self._make_title())
@@ -936,6 +942,50 @@ async def repl(
     if stdout_ctx is not None:
         stdout_ctx.__exit__(None, None, None)
 
+async def _do_rewind(rt: Runtime, pump) -> None:
+    """⏪ Interactive checkpoint restore with a scope choice."""
+    from talos.checkpoints import list_checkpoints, restore
+
+    cks = list_checkpoints()
+    if not cks:
+        console.print("[dim]no checkpoints yet[/]")
+        return
+    table = Table(title="⏪ checkpoints")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("turn", justify="right")
+    table.add_column("when", style="cyan")
+    table.add_column("files", justify="center")
+    table.add_column("prompt")
+    recent = cks[-12:]
+    for i, c in enumerate(recent, 1):
+        table.add_row(str(i), str(c.turn), c.id,
+                      "📸" if c.tree else "·", c.label)
+    console.print(table)
+    if pump is None:
+        return
+    console.print("[yellow]rewind to # (enter to cancel) ›[/] ", end="")
+    pick = (await pump.queue.get() or "").strip()
+    if not pick.isdigit() or not (1 <= int(pick) <= len(recent)):
+        return
+    target = recent[int(pick) - 1]
+    console.print(
+        "[yellow]restore what? \[b]oth · \[c]hat only · \[f]iles only ›[/] ",
+        end="",
+    )
+    scope_key = (await pump.queue.get() or "b").strip().lower()[:1]
+    scope = {"b": "both", "c": "chat", "f": "files"}.get(scope_key, "both")
+    messages, files_restored = restore(target.id, scope)
+    if messages is not None:
+        rt.messages = messages
+        save_session(rt.session_id, rt.messages)
+    bits = []
+    if messages is not None:
+        bits.append(f"chat → turn {target.turn}")
+    if files_restored:
+        bits.append("files rolled back")
+    console.print(f"[dim]⏪ {' · '.join(bits) or 'nothing restored'}[/]")
+
+
 async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
     if name == "/help":
         console.print(help_text())
@@ -949,6 +999,8 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         from talos.memory import load_memory
 
         console.print(load_memory() or "[dim](memory is empty)[/]")
+    elif name == "/rewind":
+        await _do_rewind(rt, pump)
     elif name == "/compact":
         did = await rt.maybe_compact(force=True)
         if not did:
