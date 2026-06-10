@@ -604,6 +604,30 @@ class Runtime:
         console.print()  # breathe: one blank line closes the agent block
         return final
 
+    async def learn_skill(self) -> None:
+        """🧪 Synthesize a verified skill from the recent conversation."""
+        from talos.skill_synthesis import synthesize
+
+        async def propose(prompt, transcript):
+            from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
+            msg = await build_llm(self.model_name).ainvoke(
+                [SM(content=prompt), HM(content=transcript)])
+            self._track_usage(msg)
+            return get_message_text(msg)
+
+        transcript = "\n".join(
+            f"{type(m).__name__}: {get_message_text(m)[:400]}"
+            for m in self.messages[-24:]
+        )
+        self.status.set("🧪 synthesizing a skill…")
+        result = await synthesize(transcript, propose, propose)
+        self.status.stop()
+        if result["saved"]:
+            console.print(f"[green]🧪 learned skill [bold]{result['name']}[/] "
+                          f"→ {result['path']}[/]")
+        else:
+            console.print(f"[dim]🧪 no skill saved — {result['reason']}[/]")
+
     async def verify_plan(self, plan: str) -> dict:
         """🔍 The judge: score the just-executed plan against its acceptance
         criteria. A separate LLM call over the conversation — the verifier
@@ -1050,6 +1074,8 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         console.print(load_memory() or "[dim](memory is empty)[/]")
     elif name == "/rewind":
         await _do_rewind(rt, pump)
+    elif name == "/learn":
+        await rt.learn_skill()
     elif name == "/compact":
         did = await rt.maybe_compact(force=True)
         if not did:
