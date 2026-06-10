@@ -454,7 +454,15 @@ class Runtime:
         self.stop_flag.clear()
         await self.maybe_compact()  # 🗜️ keep us under the context limit
         self._activity = ["received the task, thinking"]
-        self.messages.append(HumanMessage(content=user_input))
+        # 👁 turn the text into multimodal content if it references images
+        # and the model can see (otherwise this returns the plain string)
+        try:
+            from talos.vision import build_content
+
+            content = build_content(user_input, self.model_name)
+        except Exception:
+            content = user_input
+        self.messages.append(HumanMessage(content=content))
         collected: list[BaseMessage] = []
         # 🎨 streaming state: with markdown on, we re-render the growing
         # buffer through rich.Live (live markdown!); with it off, we print
