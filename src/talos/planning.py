@@ -57,6 +57,31 @@ def save_plan(text: str) -> Path:
     return path
 
 
+VERIFY_PROMPT = """You are a strict verifier (the 'judge' in a self-improving
+loop). The plan below was just executed. For EACH Unit of Work, check its
+acceptance criteria against what was actually done in the conversation.
+
+Return STRICT JSON:
+{"units":[{"name":"...","passed":true/false,"evidence":"...","gap":"..."}],
+ "all_passed":true/false}
+
+Be skeptical: 'passed' only if there is concrete evidence the criteria were
+met. If you can't tell, mark passed=false with the gap."""
+
+
+def parse_verdict(raw: str) -> dict:
+    """Pull the verdict JSON out of a possibly chatty reply."""
+    import json
+
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        return {"units": [], "all_passed": False}
+    try:
+        return json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return {"units": [], "all_passed": False}
+
+
 def construct_prompt(plan: str) -> str:
     """The 🔨 construct-phase kickoff message."""
     return (

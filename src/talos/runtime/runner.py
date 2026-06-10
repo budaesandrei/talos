@@ -42,6 +42,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from talos.banner import print_banner
@@ -57,8 +58,10 @@ from talos.models import estimate_cost
 from talos.permissions import PermissionGate
 from talos.planning import (
     ELABORATION_PROMPT,
+    VERIFY_PROMPT,
     construct_prompt,
     is_ready,
+    parse_verdict,
     save_plan,
 )
 from talos.sessions import (
@@ -283,6 +286,7 @@ class Runtime:
         # the fuel gauge and the auto-compaction trigger.
         self.context_tokens = 0
         self.compactions = 0
+        self._pending_verify: str | None = None
         try:
             from talos.tools.recall_tool import set_session
 
@@ -600,6 +604,47 @@ class Runtime:
         console.print()  # breathe: one blank line closes the agent block
         return final
 
+    async def verify_plan(self, plan: str) -> dict:
+        """🔍 The judge: score the just-executed plan against its acceptance
+        criteria. A separate LLM call over the conversation — the verifier
+        pattern from 2026 self-improving-agent stacks."""
+        from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
+
+        transcript = "\n".join(
+            f"{type(m).__name__}: {get_message_text(m)[:500]}"
+            for m in self.messages[-30:]
+        )
+        msg = await build_llm(self.model_name).ainvoke([
+            SM(content=VERIFY_PROMPT),
+            HM(content=f"PLAN:\n{plan}\n\nCONVERSATION:\n{transcript}"),
+        ])
+        self._track_usage(msg)
+        verdict = parse_verdict(get_message_text(msg))
+        self._render_verdict(verdict)
+        return verdict
+
+    def _render_verdict(self, verdict: dict) -> None:
+        units = verdict.get("units", [])
+        if not units:
+            console.print("[dim]🔍 verifier: no units parsed[/]")
+            return
+        table = Table(title="🔍 verification", show_header=True, header_style="dim")
+        table.add_column("unit")
+        table.add_column("", justify="center")
+        table.add_column("note", style="dim")
+        for u in units:
+            ok = u.get("passed")
+            table.add_row(
+                u.get("name", "?"),
+                "[green]✅[/]" if ok else "[red]❌[/]",
+                (u.get("evidence") if ok else u.get("gap")) or "",
+            )
+        console.print(table)
+        if verdict.get("all_passed"):
+            console.print("[green]✅ all acceptance criteria met[/]")
+        else:
+            console.print("[yellow]❌ some criteria unmet — see gaps above[/]")
+
     async def _make_title(self) -> None:
         """🏷️ LLM-generated session title, so 'talos sessions' reads like a
         list of conversations instead of a list of timestamps."""
@@ -790,6 +835,7 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
     if verdict.startswith("y"):
         # 🔨 construct phase = a normal turn: full tools, gate, interjections
         rt.inbox.insert(0, construct_prompt(plan_text))
+        rt._pending_verify = plan_text  # 🔍 verify once construct finishes
     elif verdict.startswith("r"):
         console.print("[yellow]what should change? ›[/] ", end="")
         note = (await pump.queue.get() or "").strip()
@@ -914,6 +960,9 @@ async def repl(
             console.print(f"[bold #ffd75f]→[/] [dim](queued)[/] {note}")
             if not await handle_line(note):
                 break
+            if rt._pending_verify:  # 🔍 the construct turn just finished
+                plan, rt._pending_verify = rt._pending_verify, None
+                await rt.verify_plan(plan)
             continue
 
         if pump.eof:
