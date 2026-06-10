@@ -1,4 +1,4 @@
-"""🏃 Runtime — drives the compiled graph and renders the conversation.
+"""🏃 Runtime — drives the compiled graph and renders a pleasant TUI.
 
 Two entry points:
 
@@ -11,8 +11,18 @@ Streaming: we ask LangGraph for two parallel views of the run —
   (that's what makes text appear live), and
 - ``updates`` mode yields each node's **finished output** (that's where we
   learn about tool calls and tool results, and collect history).
+
+UX details worth stealing:
+
+- a spinner runs whenever the agent is busy and *stops the moment the
+  first token arrives* — perceived latency drops to near zero
+- tool calls render as dim one-liners with per-tool emoji, results as
+  ``↳`` previews — enough to follow along without drowning in output
+- permission prompts pause the spinner, ask, then resume
+- Ctrl-C cancels the current turn, not the whole session
 """
 
+import itertools
 import json
 
 from langchain_core.messages import (
@@ -24,6 +34,8 @@ from langchain_core.messages import (
 )
 from langgraph.errors import GraphRecursionError
 from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
 from talos.config import settings
 from talos.context import build_system_prompt
@@ -39,6 +51,16 @@ from talos.sessions import (
 from talos.tools import get_tools
 
 console = Console()
+
+THINKING = itertools.cycle(
+    ["🤔 thinking", "🧠 reasoning", "🪄 putting it together", "☕ one moment"]
+)
+
+TOOL_EMOJI = {
+    "read_file": "📖", "write_file": "✍️ ", "edit_file": "✏️ ",
+    "list_dir": "📂", "glob_files": "🔍", "grep": "🔎",
+    "shell": "🐚", "web_fetch": "🌐", "save_memory": "🧠",
+}
 
 
 def get_message_text(message: BaseMessage) -> str:
@@ -60,12 +82,21 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _ask_permission(tool_name: str, args: dict) -> str:
-    """🛡️ Interactive approval prompt (used by the PermissionGate)."""
-    console.print(
-        f"\n[bold yellow]🛡️  {tool_name}[/]([dim]{_args_preview(args, 400)}[/])"
-    )
-    return console.input("[yellow]allow? \[y]es · \[n]o · \[a]lways ›[/] ")
+class _Status:
+    """Tiny wrapper around rich's spinner so we can pause it for input."""
+
+    def __init__(self):
+        self._status = None
+
+    def set(self, text: str) -> None:
+        self.stop()
+        self._status = console.status(f"[dim]{text}[/]", spinner="dots")
+        self._status.start()
+
+    def stop(self) -> None:
+        if self._status is not None:
+            self._status.stop()
+            self._status = None
 
 
 class Runtime:
@@ -78,8 +109,9 @@ class Runtime:
         interactive: bool = True,
         resume: str | None = None,
     ):
+        self.status = _Status()
         gate = PermissionGate(
-            approver=_ask_permission if interactive else None,
+            approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
         )
         self.graph = build_agent_graph(
@@ -99,12 +131,31 @@ class Runtime:
             self.session_id = new_session_id()
             self.messages = []
 
+    # ── 🛡️ permission prompt (pauses the spinner) ───────────────────────
+    def _ask_permission(self, tool_name: str, args: dict) -> str:
+        self.status.stop()
+        pretty = json.dumps(args, indent=2, ensure_ascii=False, default=str)
+        if len(pretty) > 600:
+            pretty = pretty[:600] + "\n…"
+        console.print(
+            Panel(
+                Text(pretty),
+                title=f"🛡️  {TOOL_EMOJI.get(tool_name, '🔧')} {tool_name}",
+                border_style="yellow",
+                title_align="left",
+            )
+        )
+        answer = console.input("[yellow]allow? \\[y]es · \\[n]o · \\[a]lways ›[/] ")
+        self.status.set(f"⚙️  running {tool_name}…")
+        return answer
+
+    # ── 💬 one user turn ─────────────────────────────────────────────────
     async def turn(self, user_input: str) -> str:
-        """Send one user message through the graph, streaming the output."""
         self.messages.append(HumanMessage(content=user_input))
         collected: list[BaseMessage] = []
-        streamed_any = False
+        prefix_printed = False
 
+        self.status.set(f"{next(THINKING)}…")
         try:
             async for mode, payload in self.graph.astream(
                 {"messages": self.messages},
@@ -120,22 +171,31 @@ class Runtime:
                     ):
                         text = get_message_text(chunk)
                         if text:
+                            if not prefix_printed:
+                                self.status.stop()
+                                console.print("[bold magenta]talos ›[/] ", end="")
+                                prefix_printed = True
                             print(text, end="", flush=True)
-                            streamed_any = True
 
                 elif mode == "updates":
                     for node, update in (payload or {}).items():
                         for msg in (update or {}).get("messages", []):
                             collected.append(msg)
                             self._render_side_effects(msg)
+                        if node == "tools":
+                            # back to the model for the next think step
+                            self.status.set(f"{next(THINKING)}…")
+                            prefix_printed = False
 
         except GraphRecursionError:
             console.print(
                 f"\n[yellow]⚠️  stopped: hit max_iterations "
                 f"({settings.max_iterations})[/]"
             )
+        finally:
+            self.status.stop()
 
-        if streamed_any:
+        if prefix_printed:
             print()  # finish the streamed line
         self.messages.extend(collected)
         save_session(self.session_id, self.messages)
@@ -145,19 +205,22 @@ class Runtime:
                 return get_message_text(msg)
         return ""
 
+    # ── 🔧 render tool activity ──────────────────────────────────────────
     def _render_side_effects(self, msg: BaseMessage) -> None:
-        """Show tool activity so the user can follow what the agent does."""
         if isinstance(msg, AIMessage) and msg.tool_calls:
             print(flush=True)
             for call in msg.tool_calls:
+                emoji = TOOL_EMOJI.get(call["name"], "🔧")
                 console.print(
-                    f"[dim]🔧 {call['name']}({_args_preview(call['args'])})[/]"
+                    f"[dim]{emoji} {call['name']}({_args_preview(call['args'])})[/]"
                 )
+                self.status.set(f"⚙️  running {call['name']}…")
         elif isinstance(msg, ToolMessage):
-            preview = get_message_text(msg).strip().splitlines()
-            first = preview[0] if preview else ""
-            more = f" (+{len(preview) - 1} lines)" if len(preview) > 1 else ""
-            console.print(f"[dim]   ↳ {first[:120]}{more}[/]")
+            lines = get_message_text(msg).strip().splitlines()
+            first = lines[0] if lines else ""
+            icon = "✗" if first.lower().startswith(("error", "permission denied")) else "✓"
+            more = f" (+{len(lines) - 1} lines)" if len(lines) > 1 else ""
+            console.print(f"[dim]   ↳ {icon} {first[:120]}{more}[/]")
 
 
 async def run_once(prompt: str, model: str | None = None, yolo: bool = False) -> None:
@@ -177,13 +240,17 @@ async def repl(
 ) -> None:
     """💬 Interactive mode."""
     rt = Runtime(model, yolo=yolo, resume=resume)
-    if resume and rt.messages:
-        console.print(f"[dim]💾 resumed session {rt.session_id} "
-                      f"({len(rt.messages)} messages)[/]")
-    console.print(
-        f"[bold cyan]🤖 talos[/] — model [magenta]{model or settings.model}[/] · "
-        "[dim]/exit to quit[/]"
+
+    subtitle = "[dim]/exit quits · Ctrl-C interrupts a turn[/]"
+    body = (
+        f"model [magenta]{model or settings.model}[/] · "
+        f"session [cyan]{rt.session_id}[/]"
     )
+    if yolo or settings.yolo:
+        body += " · [bold red]⚡ yolo[/]"
+    if resume and rt.messages:
+        body += f"\n[dim]💾 resumed with {len(rt.messages)} messages[/]"
+    console.print(Panel(body, title="🤖 talos", subtitle=subtitle, border_style="cyan"))
 
     if initial_prompt:
         console.print(f"[bold cyan]you ›[/] {initial_prompt}")
@@ -203,4 +270,8 @@ async def repl(
             console.print("[dim]bye 👋[/]")
             break
 
-        await rt.turn(user_input)
+        try:
+            await rt.turn(user_input)
+        except KeyboardInterrupt:
+            rt.status.stop()
+            console.print("\n[yellow]⏹  turn interrupted[/]")
