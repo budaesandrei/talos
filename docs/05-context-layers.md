@@ -41,3 +41,5 @@ talos chat -r 20260610-153012
 ```
 
 Inside a chat, `/clear` resets the in-memory history (the file keeps the old turns until the next save).
+
+Sessions are also the **crash-recovery** mechanism: history is saved after every turn, and API failures (expired key, SSL trouble, dead network) are caught instead of killing the REPL. Fix `.env`, then `talos chat -r latest` puts you right back in the conversation.

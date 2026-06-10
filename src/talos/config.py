@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     model: str = "gpt-4o-mini"
     temperature: float = 0.0
 
+    # 🔓 TLS certificate verification for LLM + web_fetch traffic.
+    # Set TALOS_VERIFY_SSL=false ONLY if a corporate proxy re-signs your
+    # traffic and you can't get its CA bundle. The better fix is to keep
+    # this true and point the SSL_CERT_FILE env var at the proxy's CA.
+    verify_ssl: bool = True
+
     # -- 🧠 Agent behaviour ----------------------------------------------
     # Max "super-steps" the agent loop may take before LangGraph raises
     # GraphRecursionError. One think->act round trip costs 2 steps.

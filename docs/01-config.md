@@ -27,6 +27,13 @@ flowchart LR
 
 The `TALOS_` prefix is stripped, so `TALOS_BASE_URL` → `settings.base_url`. One shared `settings` instance is imported everywhere — a deliberate "import-time singleton" pattern: simple, and testable because tests just set env vars or chdir.
 
+## 🔓 Behind a corporate proxy?
+
+If your network re-signs TLS traffic you'll see certificate errors. Two fixes, best first:
+
+1. keep verification on and trust the proxy CA: `SSL_CERT_FILE=C:\path\to\proxy-ca.pem`
+2. last resort: `TALOS_VERIFY_SSL=false` in `.env` — disables certificate checks for LLM + `web_fetch` traffic, which means anyone on the network path can read/alter it. Don't use it outside the proxy'd network.
+
 ## Things to try
 
 ```bash

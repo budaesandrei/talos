@@ -195,6 +195,14 @@ class Runtime:
                 f"\n[yellow]⚠️  stopped: hit max_iterations "
                 f"({settings.max_iterations})[/]"
             )
+        except Exception as exc:  # noqa: BLE001 — an API/network error must
+            # never kill the session: history is saved below, so the user can
+            # fix .env (expired key, SSL, …) and pick up where they left off.
+            console.print(f"\n[red]💥 {type(exc).__name__}:[/] {exc}")
+            console.print(
+                "[dim]conversation saved — fix the issue (e.g. refresh "
+                "TALOS_API_KEY in .env) then resume with: talos chat -r latest[/]"
+            )
         finally:
             self.status.stop()
 
