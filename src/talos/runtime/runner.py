@@ -30,6 +30,12 @@ from talos.context import build_system_prompt
 from talos.graph.builder import build_agent_graph
 from talos.llm import build_llm
 from talos.permissions import PermissionGate
+from talos.sessions import (
+    latest_session_id,
+    load_session,
+    new_session_id,
+    save_session,
+)
 from talos.tools import get_tools
 
 console = Console()
@@ -70,6 +76,7 @@ class Runtime:
         model: str | None = None,
         yolo: bool = False,
         interactive: bool = True,
+        resume: str | None = None,
     ):
         gate = PermissionGate(
             approver=_ask_permission if interactive else None,
@@ -81,7 +88,16 @@ class Runtime:
             system_prompt=build_system_prompt(),
             gate=gate,
         )
-        self.messages: list[BaseMessage] = []
+        # 💾 Either continue an old session or start a new one.
+        if resume:
+            session_id = latest_session_id() if resume == "latest" else resume
+            if session_id is None:
+                raise FileNotFoundError("no sessions to resume")
+            self.session_id = session_id
+            self.messages: list[BaseMessage] = load_session(session_id)
+        else:
+            self.session_id = new_session_id()
+            self.messages = []
 
     async def turn(self, user_input: str) -> str:
         """Send one user message through the graph, streaming the output."""
@@ -122,6 +138,7 @@ class Runtime:
         if streamed_any:
             print()  # finish the streamed line
         self.messages.extend(collected)
+        save_session(self.session_id, self.messages)
 
         for msg in reversed(collected):
             if isinstance(msg, AIMessage):
@@ -156,9 +173,13 @@ async def repl(
     model: str | None = None,
     initial_prompt: str | None = None,
     yolo: bool = False,
+    resume: str | None = None,
 ) -> None:
     """💬 Interactive mode."""
-    rt = Runtime(model, yolo=yolo)
+    rt = Runtime(model, yolo=yolo, resume=resume)
+    if resume and rt.messages:
+        console.print(f"[dim]💾 resumed session {rt.session_id} "
+                      f"({len(rt.messages)} messages)[/]")
     console.print(
         f"[bold cyan]🤖 talos[/] — model [magenta]{model or settings.model}[/] · "
         "[dim]/exit to quit[/]"

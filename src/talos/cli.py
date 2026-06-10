@@ -37,6 +37,10 @@ def chat(
     yolo: bool = typer.Option(
         False, "--yolo", help="🛡️  Skip all permission prompts (dangerous)."
     ),
+    resume: Optional[str] = typer.Option(
+        None, "--resume", "-r",
+        help="💾 Resume a saved session: an ID from 'talos sessions', or 'latest'.",
+    ),
 ) -> None:
     """💬 Chat with Talos (interactive by default)."""
     from talos.runtime.runner import repl, run_once
@@ -46,7 +50,7 @@ def chat(
             raise typer.BadParameter("--no-interactive needs a PROMPT argument")
         asyncio.run(run_once(prompt, model, yolo=yolo))
     else:
-        asyncio.run(repl(model, initial_prompt=prompt, yolo=yolo))
+        asyncio.run(repl(model, initial_prompt=prompt, yolo=yolo, resume=resume))
 
 
 @app.command()
@@ -61,6 +65,24 @@ def run(
     from talos.runtime.runner import run_once
 
     asyncio.run(run_once(prompt, model, yolo=yolo))
+
+
+@app.command()
+def sessions() -> None:
+    """💾 List saved chat sessions."""
+    from talos.sessions import list_sessions
+
+    rows = list_sessions()
+    if not rows:
+        console.print("[dim]no saved sessions yet — run 'talos chat'[/]")
+        return
+    table = Table(title="💾 Sessions")
+    table.add_column("id", style="cyan")
+    table.add_column("messages", justify="right")
+    for row in rows:
+        table.add_row(row["id"], str(row["messages"]))
+    console.print(table)
+    console.print("[dim]resume with: talos chat -r <id>   (or -r latest)[/]")
 
 
 @app.command()
