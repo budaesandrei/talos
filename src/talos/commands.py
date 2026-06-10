@@ -24,6 +24,7 @@ BUILTINS = {
     "/rewind": "⏪ jump back to a checkpoint (chat/files/both)",
     "/models": "list the provider's models, switch the active one",
     "/plan": "🗺️ plan before doing: /plan <task> (AI-DLC style)",
+    "/evolve": "🔄 lifecycle loop: debt → persona research → requirements → plan",
     "/exit": "quit (also /quit)",
 }
 
@@ -69,6 +70,8 @@ def dispatch(line: str) -> tuple[str, str]:
         return "builtin", "/exit"
     if name == "/plan":
         return "plan", args.strip()
+    if name == "/evolve":
+        return "evolve", args.strip()
     if name in BUILTINS:
         return "builtin", name
 

@@ -901,6 +901,92 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
         console.print(f"[dim]parked — it's in {path} when you want it[/]")
 
 
+async def run_evolve(rt: Runtime, pump, focus: str) -> None:
+    """🔄 The AI-DLC ouroboros: debt → persona research → requirements → plan.
+    Every phase is human-gated."""
+    from talos.context import environment_info
+    from talos.evolve import (
+        DEBT_PROMPT, PERSONAS, REQUIREMENTS_PROMPT, is_requirements_ready,
+        research_prompt,
+    )
+    from talos.tools.task_tool import _resolve_tools
+    from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
+
+    async def phase_llm(system, user):
+        msg = await build_llm(rt.model_name).ainvoke(
+            [SM(content=system + "\n\n" + environment_info()), HM(content=user)])
+        rt._track_usage(msg)
+        return get_message_text(msg)
+
+    # ── 1. 🧹 debt phase (read-only graph) ──────────────────────────────
+    rt.status.set("🧹 assessing technical debt…")
+    debt_graph = build_agent_graph(
+        llm=build_llm(rt.model_name),
+        tools=_resolve_tools([]),  # read-only
+        system_prompt=DEBT_PROMPT + "\n\n" + environment_info(),
+        gate=PermissionGate(approver=None),
+    )
+    debt_seed = focus or "Assess this project's technical debt and AI cruft."
+    debt = await debt_graph.ainvoke(
+        {"messages": [HM(content=debt_seed)]},
+        config={"recursion_limit": settings.max_iterations})
+    rt.status.stop()
+    debt_report = get_message_text(debt["messages"][-1])
+    rt._track_usage(debt["messages"][-1])
+    console.print(Panel(Markdown(debt_report), title="🧹 tech-debt report",
+                        border_style="cyan"))
+    console.print("[yellow]continue to market/persona research? \[Y/n] ›[/] ", end="")
+    if (await pump.queue.get() or "y").strip().lower().startswith("n"):
+        console.print("[dim]parked after debt phase[/]")
+        return
+
+    # ── 2. 🔬 persona research in parallel (the hats) ───────────────────
+    console.print("[dim]🔬 putting on hats: " + ", ".join(PERSONAS) + "[/]")
+    rt.status.set("🔬 persona research…")
+    async def one_hat(hat):
+        g = build_agent_graph(
+            llm=build_llm(rt.model_name),
+            tools=_resolve_tools(["read_file", "list_dir", "grep", "web_fetch"]),
+            system_prompt=research_prompt(hat) + "\n\n" + environment_info(),
+            gate=PermissionGate(approver=None, yolo=settings.yolo))
+        r = await g.ainvoke({"messages": [HM(content=focus or
+            "Critique this product from your perspective.")]},
+            config={"recursion_limit": settings.max_iterations})
+        return hat, get_message_text(r["messages"][-1])
+    pairs = await asyncio.gather(*(one_hat(h) for h in PERSONAS))
+    rt.status.stop()
+    for hat, view in pairs:
+        console.print(Panel(Markdown(view), title=f"🎭 {hat}", border_style="dim"))
+
+    # ── 3. 📋 requirements compile (human gate) ─────────────────────────
+    rt.status.set("📋 compiling requirements…")
+    blob = f"DEBT REPORT:\n{debt_report}\n\n" + "\n\n".join(
+        f"PERSONA {h}:\n{v}" for h, v in pairs)
+    reqs = await phase_llm(REQUIREMENTS_PROMPT, blob)
+    rt.status.stop()
+    console.print(Panel(Markdown(reqs), title="📋 evolution requirements",
+                        border_style="cyan"))
+    # persist alongside plans
+    try:
+        from talos.planning import plans_dir
+        from datetime import datetime
+        plans_dir().mkdir(parents=True, exist_ok=True)
+        out = plans_dir() / f"evolve-{datetime.now():%Y%m%d-%H%M%S}.md"
+        out.write_text(reqs.replace("REQUIREMENTS READY", "").strip() + "\n",
+                       encoding="utf-8")
+        console.print(f"[dim]📋 saved to {out}[/]")
+    except Exception:
+        pass
+
+    console.print("[yellow]feed these into /plan now? \[Y/n] ›[/] ", end="")
+    if (await pump.queue.get() or "y").strip().lower().startswith("n"):
+        console.print("[dim]requirements saved — run /plan when ready[/]")
+        return
+    # ── 4. ➡️ the tail meets the head: hand off to AI-DLC planning ──────
+    rt.inbox.insert(0, f"/plan Implement these evolution requirements:\n{reqs}")
+    console.print("[green]🔄 handed off to /plan — the cycle continues[/]")
+
+
 async def run_once(prompt: str, model: str | None = None, yolo: bool = False) -> None:
     """⚡ One-shot mode: single turn, then exit (good for scripts/pipes).
 
@@ -1000,6 +1086,9 @@ async def repl(
             return True
         if action == "plan":
             await run_plan(rt, pump, payload)
+            return True
+        if action == "evolve":
+            await run_evolve(rt, pump, payload)
             return True
         if action == "prompt":
             console.print("[dim]⌨️  expanded custom command[/]")
