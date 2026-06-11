@@ -10,7 +10,7 @@ from tests.fakes import FakeToolCallingModel
 
 
 async def test_textual_app_runs_a_turn(tmp_path, monkeypatch):
-    import talos.tui_app as tui_app
+    import talos.ui.tui_app as tui_app
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(

@@ -15,10 +15,10 @@ stable instructions live in files, not in chat history.
 from datetime import datetime
 from pathlib import Path
 
-from talos.agents import agents_summary
+from talos.integrations.agents import agents_summary
 from talos.config import PACKAGE_ROOT, settings
-from talos.memory import load_memory
-from talos.skills import skills_summary
+from talos.memory.notes import load_memory
+from talos.lifecycle.skills import skills_summary
 
 BASE_PROMPT_PATH = PACKAGE_ROOT / "prompts" / "system.md"
 
@@ -38,7 +38,7 @@ def load_rules() -> str:
 
 
 def environment_info() -> str:
-    from talos.environment import describe  # late import (reads settings)
+    from talos.infra.environment import describe  # late import (reads settings)
 
     return (
         "## Environment\n"
@@ -69,7 +69,7 @@ def build_system_prompt() -> str:
 
     if settings.workspace_snapshot:
         try:
-            from talos.workspace import snapshot
+            from talos.agent.workspace import snapshot
 
             snap = snapshot()
             if snap:

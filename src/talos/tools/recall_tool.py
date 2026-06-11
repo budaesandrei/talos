@@ -16,7 +16,7 @@ def recall_memory(query: str) -> str:
     """Search long-term memory from earlier in this (possibly very long)
     conversation — topics, decisions and facts that were compacted out of
     the live context. Use when the user refers to something from far back."""
-    from talos.graph_memory import load_graph
+    from talos.memory.graph_memory import load_graph
 
     if _SESSION_ID is None:
         return "no active session"

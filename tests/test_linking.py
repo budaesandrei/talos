@@ -2,7 +2,7 @@
 
 import json
 
-from talos import linking
+from talos.integrations import linking
 
 
 def _make_kiro(tmp_path):

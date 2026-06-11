@@ -27,7 +27,7 @@ _DATA_RE = re.compile(r"data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+")
 
 
 def model_supports_vision(model_id: str) -> bool:
-    from talos.models import lookup, provider_meta
+    from talos.integrations.models import lookup, provider_meta
 
     meta = provider_meta(model_id) or lookup(model_id)
     return bool(meta.get("supports_vision"))

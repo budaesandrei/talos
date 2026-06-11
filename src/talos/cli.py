@@ -46,10 +46,10 @@ def chat(
     """💬 Chat with Talos (interactive by default)."""
     if trace:
         settings.trace = True
-    from talos.tracing import init_tracing
+    from talos.infra.tracing import init_tracing
 
     init_tracing()
-    from talos.runtime.runner import repl, run_once
+    from talos.agent.runtime import repl, run_once
 
     if no_interactive:
         if not prompt:
@@ -68,7 +68,7 @@ def run(
     ),
 ) -> None:
     """⚡ One-shot: send a single prompt, stream the answer, exit."""
-    from talos.runtime.runner import run_once
+    from talos.agent.runtime import run_once
 
     asyncio.run(run_once(prompt, model, yolo=yolo))
 
@@ -76,7 +76,7 @@ def run(
 @app.command()
 def sessions() -> None:
     """💾 List saved chat sessions."""
-    from talos.sessions import list_sessions
+    from talos.memory.sessions import list_sessions
 
     rows = list_sessions()
     if not rows:
@@ -95,7 +95,7 @@ def sessions() -> None:
 @app.command()
 def skills() -> None:
     """🎒 List discovered skills (.talos/skills/*/SKILL.md)."""
-    from talos.skills import discover_skills
+    from talos.lifecycle.skills import discover_skills
 
     found = discover_skills()
     if not found:
@@ -112,7 +112,7 @@ def skills() -> None:
 @app.command()
 def agents() -> None:
     """🤖 List subagent definitions (.talos/agents/*.md)."""
-    from talos.agents import discover_agents
+    from talos.integrations.agents import discover_agents
 
     found = discover_agents()
     if not found:
@@ -130,7 +130,7 @@ def agents() -> None:
 @app.command()
 def commands() -> None:
     """⌨️  List custom slash commands (.talos/commands/*.md)."""
-    from talos.commands import custom_commands
+    from talos.ui.commands import custom_commands
 
     found = custom_commands()
     if not found:
@@ -143,7 +143,7 @@ def commands() -> None:
 @app.command()
 def mcp() -> None:
     """🔌 Show configured MCP servers and the tools they expose."""
-    from talos.mcp import load_mcp_config, load_mcp_tools, mcp_config_file
+    from talos.integrations.mcp import load_mcp_config, load_mcp_tools, mcp_config_file
 
     servers = load_mcp_config()
     if not servers:
@@ -168,7 +168,7 @@ def mcp() -> None:
 @app.command()
 def models() -> None:
     """📇 List the provider's models with context/pricing/vision info."""
-    from talos.models import list_models
+    from talos.integrations.models import list_models
 
     try:
         found = sorted(list_models(), key=lambda m: m.id)
@@ -200,7 +200,7 @@ def tui(
     """🖼️  Full-screen Textual interface (experimental) — real sidebar,
     modal permission dialogs. 'talos chat' remains the classic CLI."""
     try:
-        from talos.tui_app import run_tui
+        from talos.ui.tui_app import run_tui
     except ImportError:
         console.print("[red]textual not installed — pip install 'talos[tui]'[/]")
         raise typer.Exit(1)
@@ -210,7 +210,7 @@ def tui(
 @app.command()
 def link(path: str = typer.Argument(..., help="Agent dir to link, e.g. ~/.kiro")) -> None:
     """🔗 Link another agent's skills/agents/MCPs (kiro, cursor, claude…)."""
-    from talos.linking import add_link
+    from talos.integrations.linking import add_link
 
     console.print(add_link(path))
 
@@ -218,7 +218,7 @@ def link(path: str = typer.Argument(..., help="Agent dir to link, e.g. ~/.kiro")
 @app.command()
 def links() -> None:
     """🔗 Show linked agent directories and what they contribute."""
-    from talos.linking import discover_linked_mcp, discover_linked_skills, load_links
+    from talos.integrations.linking import discover_linked_mcp, discover_linked_skills, load_links
 
     linked = load_links()
     if not linked:
@@ -235,7 +235,7 @@ def links() -> None:
 @app.command()
 def unlink(path: str = typer.Argument(...)) -> None:
     """🔗 Remove a linked agent directory."""
-    from talos.linking import remove_link
+    from talos.integrations.linking import remove_link
 
     console.print(remove_link(path))
 

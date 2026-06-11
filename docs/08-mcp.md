@@ -1,6 +1,6 @@
 # 08 · 🔌 MCP — Model Context Protocol
 
-> File: `mcp.py` · Milestone: M13 · Previous: [07 — subagents](07-subagents.md)
+> File: `integrations/mcp.py` · Milestone: M13 · Previous: [07 — subagents](07-subagents.md)
 
 ## What it is
 

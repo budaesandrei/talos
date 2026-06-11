@@ -19,10 +19,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
 from talos.config import settings
-from talos.context import environment_info
-from talos.graph.builder import build_agent_graph
-from talos.llm import build_llm
-from talos.permissions import PermissionGate
+from talos.agent.context import environment_info
+from talos.agent.graph.builder import build_agent_graph
+from talos.agent.llm import build_llm
+from talos.infra.permissions import PermissionGate
 
 MAX_WORKERS = 6  # cap concurrency to stay polite to the provider
 

@@ -14,12 +14,12 @@ itself, so no infinite delegation chains.
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from talos.agents import discover_agents
+from talos.integrations.agents import discover_agents
 from talos.config import settings
-from talos.context import environment_info
-from talos.graph.builder import build_agent_graph
-from talos.llm import build_llm
-from talos.permissions import PermissionGate
+from talos.agent.context import environment_info
+from talos.agent.graph.builder import build_agent_graph
+from talos.agent.llm import build_llm
+from talos.infra.permissions import PermissionGate
 
 # Tools a subagent may use when its definition doesn't list any.
 DEFAULT_SUBAGENT_TOOLS = ["read_file", "list_dir", "glob_files", "grep", "web_fetch", "load_skill"]

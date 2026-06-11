@@ -1,6 +1,6 @@
 # 13 · ♾️ Long-running: compaction + graph memory
 
-> Files: `compaction.py`, `graph_memory.py` · Milestones: M33, M34 · Next: [14 — time travel](14-time-travel.md)
+> Files: `memory/compaction.py`, `memory/graph_memory.py` · Milestones: M33, M34 · Next: [14 — time travel](14-time-travel.md)
 
 The two features that turn Talos from "stateless per session" into an
 agent that never runs out of context.

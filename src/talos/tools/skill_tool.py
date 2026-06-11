@@ -2,7 +2,7 @@
 
 from langchain_core.tools import tool
 
-from talos.skills import skill_body
+from talos.lifecycle.skills import skill_body
 
 
 @tool

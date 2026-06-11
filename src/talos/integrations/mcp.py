@@ -39,7 +39,7 @@ def load_mcp_config() -> dict:
             raise ValueError(f"invalid {f}: {exc}") from exc
     # 🔗 merge MCP servers linked from other agents (local wins on name)
     try:
-        from talos.linking import discover_linked_mcp
+        from talos.integrations.linking import discover_linked_mcp
 
         for name, spec in discover_linked_mcp().items():
             servers.setdefault(name, spec)

@@ -1,6 +1,6 @@
 # 06 · ⌨️ Slash commands & 🎒 skills
 
-> Files: `commands.py`, `skills.py`, `tools/skill_tool.py` · Milestone: M10 · Next: [07 — subagents](07-subagents.md)
+> Files: `ui/commands.py`, `lifecycle/skills.py`, `tools/skill_tool.py` · Milestone: M10 · Next: [07 — subagents](07-subagents.md)
 
 Two extension mechanisms that look similar but answer to different masters:
 

@@ -37,7 +37,7 @@ def _parse_candidate(text: str) -> tuple[str, str, str] | None:
     """Return (name, description, body) or None if it isn't a valid skill."""
     if "NO SKILL" in text.upper():
         return None
-    from talos.skills import _parse_frontmatter
+    from talos.lifecycle.skills import _parse_frontmatter
 
     meta, body = _parse_frontmatter(text.strip())
     name = meta.get("name", "").strip()
@@ -78,7 +78,7 @@ async def synthesize(transcript: str, propose, review) -> dict:
     if not verdict.get("ok"):
         return {"saved": False, "reason": f"failed review: {verdict.get('reason')}"}
 
-    from talos.skills import skills_dir
+    from talos.lifecycle.skills import skills_dir
 
     dest = skills_dir() / name
     dest.mkdir(parents=True, exist_ok=True)

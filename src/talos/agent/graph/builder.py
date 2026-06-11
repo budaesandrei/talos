@@ -22,10 +22,10 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
-from talos.graph.state import AgentState
-from talos.permissions import PermissionGate
-from talos.policy import check_action
-from talos.tracing import set_span_attrs, span
+from talos.agent.graph.state import AgentState
+from talos.infra.permissions import PermissionGate
+from talos.infra.policy import check_action
+from talos.infra.tracing import set_span_attrs, span
 
 
 STOP_NOTICE = (

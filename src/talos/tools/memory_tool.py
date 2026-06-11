@@ -2,7 +2,7 @@
 
 from langchain_core.tools import tool
 
-from talos.memory import append_memory
+from talos.memory.notes import append_memory
 
 
 @tool

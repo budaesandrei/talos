@@ -6,23 +6,23 @@ Every feature category a modern agent has, implemented minimally:
 
 | Feature | Where | Docs |
 |---|---|---|
-| 🕸️ ReAct agent loop | `graph/builder.py` | [02 — agent loop](docs/02-agent-loop.md) |
+| 🕸️ ReAct agent loop | `agent/graph/builder.py` | [02 — agent loop](docs/02-agent-loop.md) |
 | 🔧 Tools (files/shell/web) | `tools/` | [03 — tools](docs/03-tools.md) |
-| 🛡️ Permissions + `--yolo` | `permissions.py` | [04 — permissions](docs/04-permissions.md) |
-| 📜 Rules file (`TALOS.md`) | `context.py` | [05 — context layers](docs/05-context-layers.md) |
+| 🛡️ Permissions + `--yolo` | `infra/permissions.py` | [04 — permissions](docs/04-permissions.md) |
+| 📜 Rules file (`TALOS.md`) | `agent/context.py` | [05 — context layers](docs/05-context-layers.md) |
 | 🧠 Long-term memory | `memory.py` | [05 — context layers](docs/05-context-layers.md) |
-| 💾 Sessions (resume) | `sessions.py` | [05 — context layers](docs/05-context-layers.md) |
-| ⌨️ Slash commands | `commands.py` | [06 — commands & skills](docs/06-commands-and-skills.md) |
-| 🎒 Skills (lazy knowledge) | `skills.py` | [06 — commands & skills](docs/06-commands-and-skills.md) |
+| 💾 Sessions (resume) | `memory/sessions.py` | [05 — context layers](docs/05-context-layers.md) |
+| ⌨️ Slash commands | `ui/commands.py` | [06 — commands & skills](docs/06-commands-and-skills.md) |
+| 🎒 Skills (lazy knowledge) | `lifecycle/skills.py` | [06 — commands & skills](docs/06-commands-and-skills.md) |
 | 🤖🤖 Subagents | `agents.py` + `tools/task_tool.py` | [07 — subagents](docs/07-subagents.md) |
-| 🔌 MCP client | `mcp.py` | [08 — mcp](docs/08-mcp.md) |
-| 🎙️ Interjections (ask/stop mid-task) | `runtime/runner.py` | [09 — interjections](docs/09-interjections.md) |
-| 📇 Models, usage & cost | `models.py` | [10 — models & cost](docs/10-models-and-cost.md) |
-| 🗺️ Plan mode (AI-DLC) | `planning.py` | [11 — plan mode](docs/11-plan-mode.md) |
-| 🖥️ TUI (menu, streaming, banner) | `tui.py`, `runtime/` | [12 — terminal UI](docs/12-terminal-ui.md) |
-| ♾️ Compaction + graph memory | `compaction.py`, `graph_memory.py` | [13 — long-running](docs/13-long-running.md) |
-| ⏪ Checkpoints · verifier · skill synthesis | `checkpoints.py`, `skill_synthesis.py` | [14 — time travel](docs/14-time-travel.md) |
-| 🔄 /evolve lifecycle | `evolve.py` | [15 — evolve](docs/15-evolve.md) |
+| 🔌 MCP client | `integrations/mcp.py` | [08 — mcp](docs/08-mcp.md) |
+| 🎙️ Interjections (ask/stop mid-task) | `agent/runtime.py` | [09 — interjections](docs/09-interjections.md) |
+| 📇 Models, usage & cost | `integrations/models.py` | [10 — models & cost](docs/10-models-and-cost.md) |
+| 🗺️ Plan mode (AI-DLC) | `lifecycle/planning.py` | [11 — plan mode](docs/11-plan-mode.md) |
+| 🖥️ TUI (menu, streaming, banner) | `ui/tui.py`, `runtime/` | [12 — terminal UI](docs/12-terminal-ui.md) |
+| ♾️ Compaction + graph memory | `memory/compaction.py`, `memory/graph_memory.py` | [13 — long-running](docs/13-long-running.md) |
+| ⏪ Checkpoints · verifier · skill synthesis | `memory/checkpoints.py`, `lifecycle/skill_synthesis.py` | [14 — time travel](docs/14-time-travel.md) |
+| 🔄 /evolve lifecycle | `lifecycle/evolve.py` | [15 — evolve](docs/15-evolve.md) |
 | 🔗 Cross-agent linking · 👥 teams · 👁 vision · 🚧 policy · 🔭 tracing | various | see docs |
 
 ## 🚀 Quickstart
@@ -117,11 +117,11 @@ Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
 src/talos/
   cli.py          🖥️ typer commands
   config.py       ⚙️ settings (.env, TALOS_* env vars)
-  llm.py          🔌 ChatOpenAI factory
-  context.py      🧠 system-prompt assembly (rules+memory+skills+agents)
-  permissions.py  🛡️ the gate
-  memory.py  sessions.py  skills.py  commands.py  agents.py  mcp.py
-  graph/          🕸️ state + builder (the loop itself)
+  agent/llm.py          🔌 ChatOpenAI factory
+  agent/context.py      🧠 system-prompt assembly (rules+memory+skills+agents)
+  infra/permissions.py  🛡️ the gate
+  memory.py  memory/sessions.py  lifecycle/skills.py  ui/commands.py  agents.py  integrations/mcp.py
+  agent/graph/          🕸️ state + builder (the loop itself)
   runtime/        🏃 streaming runner + TUI
   tools/          🔧 files · shell · web · memory · skill · task
 tests/            🎭 offline tests with a scripted fake LLM

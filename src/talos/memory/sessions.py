@@ -46,7 +46,7 @@ def get_session_meta(session_id: str) -> dict:
 
 def all_time_usage() -> dict:
     """Sum usage (and estimated cost) across every recorded session."""
-    from talos.models import estimate_cost  # late import: avoids a cycle
+    from talos.integrations.models import estimate_cost  # late import: avoids a cycle
 
     totals = {"input": 0, "output": 0, "total": 0, "turns": 0,
               "sessions": 0, "cost": 0.0}

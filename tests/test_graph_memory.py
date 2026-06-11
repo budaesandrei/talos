@@ -2,7 +2,7 @@
 
 import json
 
-from talos.graph_memory import MemoryGraph, ingest_async, load_graph, save_graph
+from talos.memory.graph_memory import MemoryGraph, ingest_async, load_graph, save_graph
 
 
 def test_communities_and_dirty_tracking():

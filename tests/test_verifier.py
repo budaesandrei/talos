@@ -1,6 +1,6 @@
 """Tests for the plan verifier (M36)."""
 
-from talos.planning import parse_verdict
+from talos.lifecycle.planning import parse_verdict
 
 
 def test_parse_clean_verdict():
@@ -23,7 +23,7 @@ def test_parse_garbage_is_safe():
 async def test_verify_plan_runs_judge(tmp_path, monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from talos.runtime import runner
+    from talos.agent import runtime as runner
     from tests.fakes import FakeToolCallingModel
 
     monkeypatch.chdir(tmp_path)

@@ -65,7 +65,7 @@ def discover_skills() -> list[Skill]:
             ))
     # 🔗 skills linked from other agents (kiro/cursor/…), local wins on name
     try:
-        from talos.linking import discover_linked_skills
+        from talos.integrations.linking import discover_linked_skills
 
         for s in discover_linked_skills():
             if s["name"] in seen:

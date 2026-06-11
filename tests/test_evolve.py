@@ -1,7 +1,7 @@
 """Tests for the /evolve lifecycle layer (M44)."""
 
-from talos import evolve
-from talos.commands import dispatch
+from talos.lifecycle import evolve
+from talos.ui.commands import dispatch
 
 
 def test_dispatch_routes_evolve():

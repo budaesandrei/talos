@@ -26,12 +26,12 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Static
 
 from talos.config import settings
-from talos.context import build_system_prompt
-from talos.graph.builder import build_agent_graph
-from talos.llm import build_llm
-from talos.models import estimate_cost
-from talos.permissions import PermissionGate
-from talos.sessions import new_session_id, save_session
+from talos.agent.context import build_system_prompt
+from talos.agent.graph.builder import build_agent_graph
+from talos.agent.llm import build_llm
+from talos.integrations.models import estimate_cost
+from talos.infra.permissions import PermissionGate
+from talos.memory.sessions import new_session_id, save_session
 from talos.tools import get_tools
 
 BRONZE = "#c97f2e"
@@ -114,7 +114,7 @@ class TalosApp(App):
         self.query_one(Input).focus()
         self._refresh_sidebar()
         # 🔥 warm /models for provider-accurate costs in the sidebar
-        from talos.models import prime_models_cache
+        from talos.integrations.models import prime_models_cache
 
         self.run_worker(asyncio.to_thread(prime_models_cache), exclusive=False)
 

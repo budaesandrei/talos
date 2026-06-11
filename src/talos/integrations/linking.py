@@ -94,7 +94,7 @@ def _resolve_skill_roots(link: Path) -> list[Path]:
 
 def discover_linked_skills() -> list[dict]:
     """All skills from linked agents, deduped by name (first link wins)."""
-    from talos.skills import _parse_frontmatter
+    from talos.lifecycle.skills import _parse_frontmatter
 
     seen: dict[str, dict] = {}
     for link in load_links():

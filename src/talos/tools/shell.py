@@ -8,8 +8,8 @@ import subprocess
 
 from langchain_core.tools import tool
 
-from talos.environment import detect_shell, shell_command
-from talos.sandbox import wrap_command
+from talos.infra.environment import detect_shell, shell_command
+from talos.infra.sandbox import wrap_command
 
 TIMEOUT_SECONDS = 120
 MAX_OUTPUT_CHARS = 8_000

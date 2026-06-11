@@ -1,6 +1,6 @@
 """Tests for verified skill synthesis (M40)."""
 
-from talos.skill_synthesis import _parse_candidate, parse_review, synthesize
+from talos.lifecycle.skill_synthesis import _parse_candidate, parse_review, synthesize
 
 GOOD = """---
 name: deploy-staging

@@ -1,6 +1,6 @@
 # 04 · 🛡️ Permissions
 
-> File: `permissions.py` · Milestone: M7 · Next: [05 — context layers](05-context-layers.md)
+> File: `infra/permissions.py` · Milestone: M7 · Next: [05 — context layers](05-context-layers.md)
 
 ## Where the gate sits
 

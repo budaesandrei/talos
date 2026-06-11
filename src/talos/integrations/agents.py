@@ -27,7 +27,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from talos.skills import _parse_frontmatter  # same minimal frontmatter format
+from talos.lifecycle.skills import _parse_frontmatter  # same minimal frontmatter format
 
 
 class AgentDef(BaseModel):
