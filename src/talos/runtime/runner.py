@@ -1243,16 +1243,34 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         console.print(Panel(table, title="📊 usage", border_style="dim",
                             title_align="left", padding=(1, 2)))
     elif name == "/models":
-        from talos.models import list_models
+        import talos.models as _mm
 
-        rt.status.set("📇 fetching /models…")
+        if _mm._models_memo is None:
+            rt.status.set("📇 fetching /v1/models…")
         try:
-            found = sorted(await asyncio.to_thread(list_models), key=lambda m: m.id)
+            # hard cap: /models must NEVER hang the REPL. Instant when the
+            # startup prime already populated the cache.
+            found = sorted(
+                await asyncio.wait_for(asyncio.to_thread(_mm.list_models), timeout=12),
+                key=lambda m: m.id,
+            )
+        except asyncio.TimeoutError:
+            rt.status.stop()
+            console.print("[red]/models timed out (12s) — your /v1/models "
+                          "endpoint is slow or unreachable.[/]")
+            return
         except Exception as exc:
             rt.status.stop()
             console.print(f"[red]could not fetch models: {exc}[/]")
+            console.print("[dim]some enterprise gateways don't expose "
+                          "/v1/models — set TALOS_MODEL manually in .env[/]")
             return
         rt.status.stop()
+        if not found:
+            console.print("[yellow]/v1/models returned an empty list[/]")
+            if _mm._prime_error:
+                console.print(f"[dim]startup prime error: {_mm._prime_error}[/]")
+            return
         table = Table(title="📇 models (from the provider's /v1/models)")
         table.add_column("#", justify="right", style="dim")
         table.add_column("id", style="cyan")

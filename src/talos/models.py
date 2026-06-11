@@ -19,6 +19,10 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel
 
+# fail fast on connect; bound the read. A models list is small — no reason
+# to wait 20s. This is the difference between "quick" and "looks hung".
+_HTTP_TIMEOUT = httpx.Timeout(connect=4.0, read=10.0, write=4.0, pool=4.0)
+
 from talos.config import settings
 
 PRICES_URL = (
@@ -69,7 +73,7 @@ def _fetch_price_db() -> dict:
     try:
         if CACHE_FILE.is_file() and time.time() - CACHE_FILE.stat().st_mtime < CACHE_TTL:
             return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-        resp = httpx.get(PRICES_URL, timeout=8, verify=settings.verify_ssl)
+        resp = httpx.get(PRICES_URL, timeout=_HTTP_TIMEOUT, verify=settings.verify_ssl)
         resp.raise_for_status()
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         CACHE_FILE.write_text(resp.text, encoding="utf-8")
@@ -186,7 +190,7 @@ def list_models(refresh: bool = False) -> list[ModelInfo]:
     resp = httpx.get(
         f"{base}/models",
         headers={"Authorization": f"Bearer {settings.api_key}"},
-        timeout=20,
+        timeout=_HTTP_TIMEOUT,
         verify=settings.verify_ssl,
     )
     resp.raise_for_status()
@@ -200,12 +204,19 @@ def list_models(refresh: bool = False) -> list[ModelInfo]:
     return _models_memo
 
 
+_prime_error: str | None = None  # why the startup prime failed, if it did
+
+
 def prime_models_cache() -> int:
     """🔥 Called in the background at chat startup: one /models round trip
     warms both the picker and the cost engine. Returns models found."""
+    global _prime_error
     try:
-        return len(list_models())
-    except Exception:
+        n = len(list_models())
+        _prime_error = None
+        return n
+    except Exception as exc:
+        _prime_error = f"{type(exc).__name__}: {exc}"
         return 0
 
 
