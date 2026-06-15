@@ -266,3 +266,189 @@ def config() -> None:
     table.add_row("yolo", str(settings.yolo))
     table.add_row("sandbox", settings.sandbox)
     console.print(table)
+
+
+# ── 📅 scheduled tasks ─────────────────────────────────────────────────
+# Sub-typer for `talos schedule ...`. M49 ships the cron-only path; M50
+# adds NL→cron with a human gate; M51 wires up chat-time surfacing.
+
+schedule_app = typer.Typer(
+    no_args_is_help=True,
+    help="📅 Run prompts on a cron schedule (daemon + storage in .talos/schedules/).",
+)
+app.add_typer(schedule_app, name="schedule")
+
+
+def _schedule_table(scheds) -> Table:
+    """Pretty-print a list of schedules — shared between `list` and `show`."""
+    from datetime import datetime
+
+    from talos.lifecycle.scheduling import floor_for, next_fire
+
+    table = Table(title="📅 schedules")
+    table.add_column("id", style="cyan")
+    table.add_column("cron", style="magenta")
+    table.add_column("next fire")
+    table.add_column("last fire", style="dim")
+    table.add_column("✓", justify="center")
+    table.add_column("prompt", style="dim")
+    for s in scheds:
+        try:
+            nxt = next_fire(s, floor_for(s)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            nxt = "[red]?[/]"
+        status = {
+            "ok": "[green]✅[/]",
+            "error": "[red]💥[/]",
+            "skipped": "[yellow]⏭[/]",
+        }.get(s.last_status, "·")
+        prompt = s.prompt if len(s.prompt) < 50 else s.prompt[:47] + "…"
+        table.add_row(
+            s.id, s.cron, nxt, s.last_fire or "·", status, prompt,
+        )
+    return table
+
+
+@schedule_app.command("add")
+def schedule_add(
+    prompt: str = typer.Argument(..., help="The prompt the agent will run on each fire."),
+    cron: str = typer.Option(..., "--cron", "-c", help='Cron expression, e.g. "0 9 * * *" for 9am daily.'),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Schedule id (defaults to a slug of the prompt)."),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the model just for this schedule."),
+    yolo: bool = typer.Option(False, "--yolo", help="🛡️  Required if the schedule uses mutating tools — nobody's around to approve."),
+    resume: bool = typer.Option(False, "--resume", help="🎟️  Use a rolling session that grows across fires (M50)."),
+    tz: Optional[str] = typer.Option(None, "--tz", help="IANA timezone for cron interpretation (M50+)."),
+) -> None:
+    """➕ Add a scheduled task."""
+    from talos.lifecycle.scheduling import (
+        Schedule, list_schedules, save_schedule, slugify, unique_id,
+        upcoming_fires, validate_cron,
+    )
+
+    try:
+        cron = validate_cron(cron)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+
+    sid = unique_id(name or slugify(prompt), (s.id for s in list_schedules()))
+    sched = Schedule(
+        id=sid, prompt=prompt, cron=cron, tz=tz, model=model, yolo=yolo, resume=resume,
+    )
+    save_schedule(sched)
+    console.print(f"[green]📅 added [bold]{sid}[/][/] — {prompt}")
+    from datetime import datetime as _dt
+    upcoming = upcoming_fires(cron, _dt.now(), 3)
+    console.print("[dim]next fires:[/]")
+    for ts in upcoming:
+        console.print(f"  [magenta]→[/] {ts.strftime('%Y-%m-%d %H:%M')}")
+    console.print("[dim]start the daemon with: talos schedule run[/]")
+
+
+@schedule_app.command("list")
+def schedule_list() -> None:
+    """📅 List scheduled tasks."""
+    from talos.lifecycle.scheduling import list_schedules
+
+    scheds = list_schedules()
+    if not scheds:
+        console.print("[dim]no schedules yet — try: talos schedule add 'do X' --cron '0 9 * * *'[/]")
+        return
+    console.print(_schedule_table(scheds))
+
+
+@schedule_app.command("show")
+def schedule_show(
+    schedule_id: str = typer.Argument(..., help="Schedule id to show."),
+    runs: int = typer.Option(5, "--runs", "-r", help="How many recent runs to list."),
+) -> None:
+    """🔎 Show one schedule plus its recent fires."""
+    from talos.lifecycle.scheduling import get_schedule, list_runs
+
+    sched = get_schedule(schedule_id)
+    if sched is None:
+        console.print(f"[red]no schedule named {schedule_id!r}[/]")
+        raise typer.Exit(1)
+    console.print(_schedule_table([sched]))
+    history = list_runs(schedule_id, limit=runs)
+    if not history:
+        console.print("[dim]no runs yet[/]")
+        return
+    rtable = Table(title=f"📜 last {len(history)} run(s)")
+    rtable.add_column("started", style="cyan")
+    rtable.add_column("status", justify="center")
+    rtable.add_column("dur")
+    rtable.add_column("response", style="dim")
+    icons = {"ok": "[green]✅[/]", "error": "[red]💥[/]", "skipped": "[yellow]⏭[/]"}
+    for r in history:
+        resp = (r.get("response") or "").splitlines()[0:1]
+        text = (resp[0] if resp else "")[:80]
+        dur = r.get("duration_s")
+        rtable.add_row(
+            r.get("started_at", "?"),
+            icons.get(r.get("status"), "·"),
+            f"{dur:.1f}s" if dur is not None else "·",
+            text,
+        )
+    console.print(rtable)
+
+
+@schedule_app.command("remove")
+def schedule_remove(
+    schedule_id: str = typer.Argument(..., help="Schedule id to remove."),
+) -> None:
+    """🗑️  Remove a schedule. Run history on disk is preserved."""
+    from talos.lifecycle.scheduling import remove_schedule
+
+    if remove_schedule(schedule_id):
+        console.print(f"[green]🗑️  removed [bold]{schedule_id}[/][/]")
+    else:
+        console.print(f"[red]no schedule named {schedule_id!r}[/]")
+        raise typer.Exit(1)
+
+
+@schedule_app.command("run")
+def schedule_run(
+    tick: int = typer.Option(30, "--tick", help="Seconds between scheduler ticks."),
+    once: bool = typer.Option(False, "--once", help="Run one tick and exit (useful for cron-driven setups)."),
+) -> None:
+    """🏃 Run the scheduler daemon — wakes on each tick and fires due schedules.
+
+    Stop with Ctrl-C. Fires write to ``.talos/schedules/<id>/runs/<ts>.{md,json}``;
+    on next ``talos chat`` the banner shows how many runs are unread.
+    """
+    import signal
+
+    from talos.lifecycle.scheduling import daemon_loop
+
+    stop = asyncio.Event()
+
+    def _ask_stop(*_args) -> None:
+        console.print("\n[yellow]🛑 stopping after current fires finish…[/]")
+        stop.set()
+
+    try:
+        # SIGINT works on every platform; SIGTERM is POSIX-only — guard it.
+        signal.signal(signal.SIGINT, _ask_stop)
+        if hasattr(signal, "SIGTERM"):
+            try:
+                signal.signal(signal.SIGTERM, _ask_stop)
+            except (ValueError, OSError):
+                pass  # not on the main thread or unsupported
+    except ValueError:
+        pass
+
+    def _log(msg: str) -> None:
+        console.print(f"[dim]{msg}[/]")
+
+    asyncio.run(
+        daemon_loop(
+            tick_seconds=tick,
+            stop=stop,
+            log=_log,
+            max_ticks=1 if once else None,
+        )
+    )
