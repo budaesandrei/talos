@@ -637,7 +637,7 @@ class Runtime:
             return
         existing = Path("TALOS.md")
         if existing.is_file():
-            console.print("[yellow]TALOS.md exists — overwrite? \[y/N] ›[/] ", end="")
+            console.print(r"[yellow]TALOS.md exists — overwrite? \[y/N] ›[/] ", end="")
             # handled inline only when a pump is around; default safe = skip
         Path("TALOS.md").write_text(content + "\n", encoding="utf-8")
         console.print("[green]🗂️ wrote TALOS.md — workspace rules for future "
@@ -893,7 +893,7 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
     console.print(f"[dim]🗺️ saved to {path}[/]")
 
     # 🚦 the human gate
-    console.print("[yellow]execute? \[y]es · \[r]evise · \[n]ot now ›[/] ", end="")
+    console.print(r"[yellow]execute? \[y]es · \[r]evise · \[n]ot now ›[/] ", end="")
     verdict = (await pump.queue.get() or "").strip().lower()
     if verdict.startswith("y"):
         # 🔨 construct phase = a normal turn: full tools, gate, interjections
@@ -941,7 +941,7 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     rt._track_usage(debt["messages"][-1])
     console.print(Panel(Markdown(debt_report), title="🧹 tech-debt report",
                         border_style="cyan"))
-    console.print("[yellow]continue to market/persona research? \[Y/n] ›[/] ", end="")
+    console.print(r"[yellow]continue to market/persona research? \[Y/n] ›[/] ", end="")
     if (await pump.queue.get() or "y").strip().lower().startswith("n"):
         console.print("[dim]parked after debt phase[/]")
         return
@@ -984,7 +984,7 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     except Exception:
         pass
 
-    console.print("[yellow]feed these into /plan now? \[Y/n] ›[/] ", end="")
+    console.print(r"[yellow]feed these into /plan now? \[Y/n] ›[/] ", end="")
     if (await pump.queue.get() or "y").strip().lower().startswith("n"):
         console.print("[dim]requirements saved — run /plan when ready[/]")
         return
@@ -1030,6 +1030,16 @@ async def repl(
         resumed=len(rt.messages) if resume else 0,
         title=rt.title,
     )
+
+    # ⚠️ no credentials configured → the model name shown is just the
+    # default; a real request would 401. Tell the user plainly rather than
+    # letting them think gpt-4o-mini is wired up.
+    if not settings.api_key:
+        console.print(
+            "[yellow]⚠️  no API key configured[/] — set TALOS_API_KEY (+ "
+            "TALOS_BASE_URL / TALOS_MODEL) in .env or your environment. "
+            f"[dim]showing the default model '{rt.model_name}'.[/]"
+        )
 
     # 🔥 warm /models in the background: one round trip gives the picker
     # its list AND the cost engine the provider's own per-token prices
@@ -1170,7 +1180,7 @@ async def _do_rewind(rt: Runtime, pump) -> None:
         return
     target = recent[int(pick) - 1]
     console.print(
-        "[yellow]restore what? \[b]oth · \[c]hat only · \[f]iles only ›[/] ",
+        r"[yellow]restore what? \[b]oth · \[c]hat only · \[f]iles only ›[/] ",
         end="",
     )
     scope_key = (await pump.queue.get() or "b").strip().lower()[:1]
