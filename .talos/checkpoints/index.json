@@ -425,5 +425,60 @@
     }
    }
   ]
+ },
+ {
+  "id": "095518-1",
+  "turn": 1,
+  "label": "first line\nsecond line",
+  "tree": null,
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "first line\nsecond line",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "8a4737ff-2025-4364-a832-11fad9030d0a"
+    }
+   },
+   {
+    "type": "ai",
+    "data": {
+     "content": "# Hello\n\nThis is a **short** answer with a list:\n- one\n- two",
+     "additional_kwargs": {
+      "refusal": null
+     },
+     "response_metadata": {
+      "token_usage": {
+       "completion_tokens": 1,
+       "prompt_tokens": 1,
+       "total_tokens": 2,
+       "completion_tokens_details": null,
+       "prompt_tokens_details": null
+      },
+      "model_provider": "openai",
+      "model_name": "mock",
+      "system_fingerprint": null,
+      "id": "1",
+      "finish_reason": "stop",
+      "logprobs": null
+     },
+     "type": "ai",
+     "name": null,
+     "id": "lc_run--019ecab4-fb38-7551-b781-303b7819ad32-0",
+     "tool_calls": [],
+     "invalid_tool_calls": [],
+     "usage_metadata": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "total_tokens": 2,
+      "input_token_details": {},
+      "output_token_details": {}
+     }
+    }
+   }
+  ]
  }
 ]

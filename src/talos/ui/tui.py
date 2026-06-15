@@ -51,7 +51,7 @@ class StatusState:
 STYLE = Style.from_dict(
     {
         "": "#f0e6d2",                          # ✍️ input text: warm highlight
-        "prompt": "bold #ffd75f",               # → the golden arrow
+        "prompt": "#ffd75f",               # → the golden arrow
         "rprompt": "#6c6c6c",                   # 📊 stats pinned to the right
         "bottom-toolbar": "noreverse",          # kill the default reverse video
         "menu-row": "#9e9e9e",
@@ -164,15 +164,27 @@ def build_session(stats=None, status: StatusState | None = None):
 
     kb.add("tab", filter=menu_on)(_accept)
 
-    # Enter = "take the highlighted command" while the menu is open…
-    exact = Condition(
-        lambda: get_app().current_buffer.text.strip() == (menu.selected() or "")
-    )
-
-    @kb.add("enter", filter=menu_on & ~exact)
+    # ⏎ Enter: pick the highlighted command if the menu is open on a partial
+    # match; otherwise SUBMIT the line. (multiline=True means the default
+    # Enter would insert a newline, so we bind it explicitly.)
+    @kb.add("enter")
     def _enter(event):
-        _accept(event)
-    # …but an exact match falls through to normal Enter (submits the line).
+        b = event.current_buffer
+        if menu.active() and b.text.strip() != (menu.selected() or ""):
+            _accept(event)
+        else:
+            b.validate_and_handle()  # submit
+
+    # ↵ multi-line: Alt+Enter and Ctrl+J insert a newline. (Shift+Enter is
+    # indistinguishable from Enter in most terminals + prompt_toolkit has no
+    # such key, so Alt+Enter is the portable "newline without submitting".)
+    @kb.add("escape", "enter")
+    def _newline_alt(event):
+        event.current_buffer.insert_text("\n")
+
+    @kb.add("c-j")
+    def _newline_cj(event):
+        event.current_buffer.insert_text("\n")
 
     def toolbar():
         rendered = menu.render(session.default_buffer.text)
@@ -182,8 +194,17 @@ def build_session(stats=None, status: StatusState | None = None):
             return status.render()
         return ""
 
+    def continuation(width, line_number, is_soft_wrap):
+        # the left ▏ bar repeats on every line, so a multi-line message reads
+        # as one bordered block (no arrow, just the rule).
+        return [("class:prompt", "▏ ")]
+
     session = PromptSession(
-        message=[("class:prompt", "→ ")],
+        message=[("class:prompt", "▏ ")],   # left rule instead of an arrow
+        multiline=True,                       # Enter submits, Alt+Enter newlines
+        prompt_continuation=continuation,
+        erase_when_done=True,                 # erase the live input; the repl
+                                              # reprints it in a bordered panel
         key_bindings=kb,
         style=STYLE,
         cursor=CursorShape.BLOCK,    # ▮ the filled-block cursor

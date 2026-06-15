@@ -1,5 +1,14 @@
 # 12 · 🖥️ Terminal UI engineering
 
+**Input UX** (M48): the CLI prompt is a left ▏ rule (no arrow). Multi-line
+is **Alt+Enter** (also Ctrl+J) to add a line, Enter to submit — Shift+Enter
+is indistinguishable from Enter in most terminals, so Alt+Enter is the
+portable newline. On submit the prompt erases (`erase_when_done`) and the
+message is reprinted in a bordered "you" panel, rendered as **markdown** so
+pasted ```code``` fences and `inline code` display properly — and the
+border is the clean separation from the agent's reply below.
+
+
 > Files: `agent/runtime.py`, `ui/tui.py`, `ui/banner.py` · Milestones: M9, M16, M19, M25–M28
 
 A CLI agent is still a *product* — these are the TUI techniques Talos uses

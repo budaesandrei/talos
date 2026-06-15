@@ -38,6 +38,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langgraph.errors import GraphRecursionError
+from rich import box
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -76,6 +77,23 @@ from talos.agent.thinking import ThinkSplitter
 from talos.tools import get_tools
 
 console = Console()
+
+
+def render_user_message(text: str) -> None:
+    """🟦 Echo the user's message in a bordered panel, rendered as markdown
+    so pasted ```code``` blocks and `inline code` look right. The border is
+    the clear separation from the agent's reply below it."""
+    body = Markdown(text) if text.strip() else Text(text)
+    console.print(
+        Panel(
+            body,
+            border_style="#5f87af",
+            box=box.ROUNDED,
+            padding=(0, 1),
+            title="[dim]you[/]",
+            title_align="left",
+        )
+    )
 
 THINKING = itertools.cycle(
     ["🤔 thinking", "🧠 reasoning", "🪄 putting it together", "☕ one moment"]
@@ -1106,6 +1124,7 @@ async def repl(
         rt.status.sink = getattr(pump, "status_state", None)
 
     async def run_turn(text: str) -> None:
+        render_user_message(text)  # 🟦 bordered echo, then the agent replies
         if fancy:
             # 🆕 turn-based: no pinned prompt, no patch_stdout — tokens stream
             # straight to the terminal (clean separation, no flicker, real
@@ -1166,14 +1185,12 @@ async def repl(
         return True
 
     if initial_prompt:
-        console.print(f"[bold #ffd75f]→[/] {initial_prompt}")
         await run_turn(initial_prompt)
 
     while True:
         # 📨 first, anything the user queued while the agent was busy
         if rt.inbox:
             note = rt.inbox.pop(0)
-            console.print(f"[bold #ffd75f]→[/] [dim](queued)[/] {note}")
             if not await handle_line(note):
                 break
             if rt._pending_verify:  # 🔍 the construct turn just finished
@@ -1188,7 +1205,7 @@ async def repl(
         if fancy:
             line = await pump.get_line()
         else:
-            console.print("[bold #ffd75f]→[/] ", end="")
+            console.print("[dim]▏ type below[/]")
             try:
                 line = await pump.queue.get()
             except KeyboardInterrupt:
