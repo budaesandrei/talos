@@ -46,15 +46,19 @@ repaints; and ordering matters — the banner's animation must finish
 *before* the prompt (and `patch_stdout`) start, or every frame re-prints
 as a separate block.
 
-**Flicker-free streaming** (M45): tokens print **append-only** — we never
-repaint the growing buffer. rich.Live repainting was the bug behind both
-the flicker and the "top 3 lines duplicated ×30": once an answer is taller
-than the terminal, Live can't erase what scrolled into scrollback, so each
-repaint re-emitted the visible top. Now we stream plain text, then
-re-render as markdown only when the whole answer still fits on screen
-(so the cursor-up clear is reliable) — otherwise the plain stream stands.
-💭 think mode splits a <thinking> block (dim, shown live, stripped before
-save) from the answer, handling tags split across token chunks.
+**Flicker-free streaming & clean separation** (M47): the prompt is
+**turn-based** — prompt_toolkit runs only *between* turns to read a line
+(with the inline menu); during streaming there is NO pinned prompt and NO
+`patch_stdout`. Tokens print **append-only** straight to the terminal, so
+the user's input line stays above and the agent's answer streams below
+with the `▌⚒ talos` header between them. This kills three bugs at once:
+the flicker (rich.Live / patch_stdout were repainting every token), the
+"top lines duplicated ×30" (Live can't erase what scrolled off-screen),
+and the cursor pinned in the stream. Markdown is re-rendered only when the
+answer still fits on screen (safe cursor-up clear); longer answers stay as
+the plain stream. A fallback renders the whole answer if a provider
+doesn't stream tokens. "Type while it works" interjections are now opt-in
+(`TALOS_INTERJECT=true`), since they require a pinned prompt.
 
 **Conversation chrome** (M29): the user's line is a golden `→` with the
 input text warm-highlighted and a ▮ block cursor (`CursorShape.BLOCK`);

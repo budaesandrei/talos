@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     compact_at: float = 0.70
     keep_recent: int = 6
 
+    # ⌨️ Interjections: keep reading stdin WHILE the agent streams so you
+    # can type status questions / stop mid-task. Off by default because it
+    # requires a pinned prompt that some terminals render with flicker; the
+    # default turn-based UI streams cleanly with native scrollback.
+    interject: bool = False
+
     # 💭 Think mode: ask the model to reason in a <thinking> scratchpad
     # before answering (works on ANY model, not just reasoning models).
     # Rendered dim and never saved to history. /think toggles it live.

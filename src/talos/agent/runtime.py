@@ -107,43 +107,67 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-class _PromptPump:
-    """⌨️→📬 prompt_toolkit edition of the stdin pump (real terminals).
+class _QueueAdapter:
+    """Lets one-shot prompt code reuse the ``await pump.queue.get()`` API:
+    each ``get()`` simply shows the prompt once and returns the line."""
 
-    Same contract as _StdinPump (lines land in .queue, EOF → None), but
-    the user gets a persistent editable prompt at the bottom with TAB
-    completion for slash commands, while agent output prints above it
-    (prompt_toolkit's patch_stdout does that part).
+    def __init__(self, reader):
+        self._reader = reader
+
+    async def get(self):
+        return await self._reader.get_line()
+
+
+class _PromptPump:
+    """⌨️ Fancy line reader — turn-based, NOT pinned.
+
+    The previous design kept a prompt_toolkit prompt alive for the whole
+    session and printed agent output *through* ``patch_stdout``. That
+    repainted the app on every token (flicker), pinned the cursor at the
+    prompt (no separation), and corrupted scrollback when you scrolled
+    mid-stream (duplicated paragraphs).
+
+    This version runs the prompt only when we actually need a line — between
+    turns, or for an approval/plan question. During streaming there is NO
+    prompt and NO patch_stdout, so tokens go straight to the terminal:
+    clean separation, zero flicker, native scrollback.
     """
 
+    fancy = True
+
     def __init__(self, stats=None):
-        from talos.ui.tui import StatusState
-
-        self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
         self.eof = False
-        self.fancy = True
-        self.status_state = StatusState()  # ⚒ rendered in the prompt's toolbar
         self._stats = stats
-        self._task = asyncio.create_task(self._loop())
+        self._session = None
+        self.queue = _QueueAdapter(self)  # compat for await pump.queue.get()
 
-    async def _loop(self) -> None:
-        from talos.ui.tui import build_session
+    def _ensure(self):
+        if self._session is None:
+            from talos.ui.tui import build_session
 
-        session = build_session(stats=self._stats, status=self.status_state)
-        while True:
-            try:
-                line = await session.prompt_async()
-            except EOFError:
-                await self.queue.put(None)
-                return
-            except KeyboardInterrupt:
-                continue  # clear the line, keep the session
-            await self.queue.put(line)
+            self._session = build_session(stats=self._stats)
+        return self._session
+
+    async def get_line(self, prompt_text=None):
+        session = self._ensure()
+        try:
+            if prompt_text is not None:
+                return await session.prompt_async(prompt_text)
+            return await session.prompt_async()
+        except EOFError:           # Ctrl-D → end the session
+            self.eof = True
+            return None
+        except KeyboardInterrupt:  # Ctrl-C at an empty prompt → ignore
+            return ""
 
 
-def make_pump(stats=None):
-    """Fancy prompt on real terminals; plain thread pump for pipes/tests."""
-    if sys.stdin.isatty() and sys.stdout.isatty():
+def make_input(stats=None):
+    """Pick the input mechanism:
+    - a real terminal + interjections OFF → the clean turn-based fancy reader
+    - interjections ON, or a pipe/non-tty → the always-on stdin pump
+    """
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    if tty and not settings.interject:
         return _PromptPump(stats)
     return _StdinPump()
 
@@ -258,6 +282,7 @@ class Runtime:
         self.inbox: list[str] = []              # 📨 /btw-style queued notes
         self._activity: list[str] = []          # 🗣️ narrator's source material
         self._line_request: asyncio.Future | None = None  # approval waiting?
+        self._reader = None  # one-shot reader, set by the repl in fancy mode
         self._gate = PermissionGate(
             approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
@@ -438,13 +463,18 @@ class Runtime:
                 title_align="left",
             )
         )
-        console.print("[yellow]allow? \\[y]es · \\[n]o · \\[a]lways ›[/] ", end="")
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._line_request = fut
-        try:
-            answer = await fut
-        finally:
-            self._line_request = None
+        console.print(r"[yellow]allow? \[y]es · \[n]o · \[a]lways ›[/] ", end="")
+        if self._reader is not None:
+            # 🆕 turn-based fancy mode: read the answer with a one-shot prompt
+            answer = await self._reader.get_line("") or ""
+        else:
+            # interject mode: park a Future the interjection loop fulfils
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            self._line_request = fut
+            try:
+                answer = await fut
+            finally:
+                self._line_request = None
         self.status.set(f"⚙️  running {tool_name}…")
         return answer
 
@@ -468,11 +498,17 @@ class Runtime:
         # 🎨 streaming state: with markdown on, we re-render the growing
         # buffer through rich.Live (live markdown!); with it off, we print
         # raw tokens. Either way the spinner dies on the first token.
-        buffer = ""
-        live: Live | None = None
-        prefix_printed = False
+        # 🎨 APPEND-ONLY streaming: tokens print straight to the terminal,
+        # never repainted. rich.Live repainting the growing buffer was the
+        # cause of the flicker + the overflow-duplication when scrolling. We
+        # stream plain, then re-render as markdown only if the answer still
+        # fits on screen (so the cursor-up clear is safe).
+        buffer = ""               # answer text so far
+        answer_rows = 0           # terminal rows the answer has occupied
+        body_printed = False
         reasoning_open = False
         header_printed = False
+        self._body_shown = False  # did any answer text reach the screen?
 
         def ensure_header() -> None:
             nonlocal header_printed
@@ -480,16 +516,31 @@ class Runtime:
                 console.print(self._header(), highlight=False)
                 header_printed = True
 
+        def emit(text: str) -> None:
+            nonlocal answer_rows
+            print(text, end="", flush=True)
+            width = max(console.width, 1)
+            for i, line in enumerate(text.split("\n")):
+                if i:
+                    answer_rows += 1
+                answer_rows += len(line) // width
+
         def close_stream() -> None:
-            nonlocal live, buffer, prefix_printed, reasoning_open
-            if live is not None:
-                live.stop()
-                live = None
-            if prefix_printed or reasoning_open:
+            nonlocal buffer, body_printed, reasoning_open, answer_rows
+            if reasoning_open:
+                print()
+                reasoning_open = False
+            if body_printed:
                 print()  # finish the streamed line
+                if (settings.markdown and buffer.strip()
+                        and answer_rows + 1 < console.height):
+                    # short answer → re-render it nicely (safe cursor-up clear)
+                    sys.stdout.write(f"\x1b[{answer_rows + 1}A\x1b[J")
+                    sys.stdout.flush()
+                    console.print(Markdown(buffer))
             buffer = ""
-            prefix_printed = False
-            reasoning_open = False
+            body_printed = False
+            answer_rows = 0
 
         self.status.set(f"{next(THINKING)}…{self._usage_suffix()}")
         try:
@@ -530,22 +581,11 @@ class Runtime:
                             print()  # close the reasoning block
                             reasoning_open = False
                         self.status.stop()
-                        if settings.markdown:
-                            buffer += text
-                            if live is None:
-                                ensure_header()
-                                live = Live(
-                                    console=console,
-                                    refresh_per_second=8,
-                                    vertical_overflow="visible",
-                                )
-                                live.start()
-                            live.update(Markdown(buffer))
-                        else:
-                            if not prefix_printed:
-                                ensure_header()
-                                prefix_printed = True
-                            print(text, end="", flush=True)
+                        ensure_header()
+                        body_printed = True
+                        self._body_shown = True
+                        buffer += text
+                        emit(text)  # append-only, flicker-free
 
                 elif mode == "updates":
                     close_stream()  # tool lines must not fight the Live region
@@ -602,6 +642,17 @@ class Runtime:
             if isinstance(msg, AIMessage):
                 final = get_message_text(msg)
                 break
+
+        # 🛟 fallback: some providers don't stream tokens (the answer arrives
+        # whole, via 'updates'). If nothing reached the screen, render it now
+        # so the reply is never invisible.
+        if final.strip() and not self._body_shown:
+            console.print(self._header(), highlight=False)
+            from talos.agent.thinking import ThinkSplitter
+
+            shown = ThinkSplitter.strip(final) if "<thinking>" in final.lower() else final
+            console.print(Markdown(shown) if settings.markdown else shown,
+                          highlight=False)
 
         # 🧜 mermaid can't render in a terminal — offer the browser instead.
         self.last_mermaid = extract_mermaid(final)
@@ -1019,9 +1070,7 @@ async def repl(
     """
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
 
-    # 🕹️ banner FIRST — its Live animation needs the raw terminal. Only
-    # then start the prompt + patch_stdout, or every animation frame
-    # would be re-printed above the prompt as a separate block.
+    # 🕹️ banner first, before any prompt is drawn.
     print_banner(
         console,
         model=rt.model_name,
@@ -1047,26 +1096,31 @@ async def repl(
 
     asyncio.get_running_loop().run_in_executor(None, prime_models_cache)
 
-    pump = make_pump(stats=rt.stats_line)  # sole stdin reader + 📊 rprompt
-    if pump.fancy:
-        rt.status.sink = pump.status_state  # ⚒ status renders in the toolbar
-    if pump.fancy:
-        # output prints ABOVE the persistent bottom prompt
-        from prompt_toolkit.patch_stdout import patch_stdout
-
-        stdout_ctx = patch_stdout(raw=True)
-        stdout_ctx.__enter__()
+    pump = make_input(stats=rt.stats_line)
+    fancy = getattr(pump, "fancy", False)
+    if fancy:
+        # one-shot reader handles approval/plan/evolve prompts mid-turn
+        rt._reader = pump
     else:
-        stdout_ctx = None
+        # plain pump: the ⚒ status renders in its pinned toolbar
+        rt.status.sink = getattr(pump, "status_state", None)
 
     async def run_turn(text: str) -> None:
-        """One turn, listening for interjections the whole time."""
+        if fancy:
+            # 🆕 turn-based: no pinned prompt, no patch_stdout — tokens stream
+            # straight to the terminal (clean separation, no flicker, real
+            # scrollback). Ctrl-C interrupts just this turn.
+            try:
+                await rt.turn(text)
+            except KeyboardInterrupt:
+                rt.status.stop()
+                console.print("\n[yellow]⏹  turn interrupted[/]")
+            return
+        # ⌨️ interject mode: watch stdin while the turn streams
         turn_task = asyncio.create_task(rt.turn(text))
         try:
             while not turn_task.done():
                 if pump.eof:
-                    # stdin is closed (piped input): nobody can interject —
-                    # just let the turn finish.
                     await turn_task
                     break
                 getter = asyncio.create_task(pump.queue.get())
@@ -1076,7 +1130,7 @@ async def repl(
                 if getter.done():
                     line = getter.result()
                     if line is None:
-                        pump.eof = True  # remember; don't kill the turn
+                        pump.eof = True
                     elif line.strip():
                         await rt.interject(line.strip(), turn_task)
                 else:
@@ -1131,12 +1185,14 @@ async def repl(
             console.print("[dim]bye 👋[/]")
             break
 
-        if not pump.fancy:  # the fancy pump draws its own prompt
+        if fancy:
+            line = await pump.get_line()
+        else:
             console.print("[bold #ffd75f]→[/] ", end="")
-        try:
-            line = await pump.queue.get()
-        except KeyboardInterrupt:
-            line = None
+            try:
+                line = await pump.queue.get()
+            except KeyboardInterrupt:
+                line = None
         if line is None:
             console.print("\n[dim]bye 👋[/]")
             break
@@ -1149,9 +1205,6 @@ async def repl(
             console.print(f"[dim]📋 pasted {len(stripped):,} chars[/]")
         if not await handle_line(stripped):
             break
-
-    if stdout_ctx is not None:
-        stdout_ctx.__exit__(None, None, None)
 
 async def _do_rewind(rt: Runtime, pump) -> None:
     """⏪ Interactive checkpoint restore with a scope choice."""

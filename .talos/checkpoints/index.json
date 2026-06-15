@@ -167,5 +167,263 @@
     }
    }
   ]
+ },
+ {
+  "id": "092457-1",
+  "turn": 1,
+  "label": "explain stuff",
+  "tree": null,
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "explain stuff",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "38abdff4-4388-4e8f-8042-d449155b58e8"
+    }
+   }
+  ]
+ },
+ {
+  "id": "092529-1",
+  "turn": 1,
+  "label": "explain stuff",
+  "tree": null,
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "explain stuff",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "9b459f5d-c6e2-4d4d-a774-393c8cea2102"
+    }
+   }
+  ]
+ },
+ {
+  "id": "092609-1",
+  "turn": 1,
+  "label": "explain stuff",
+  "tree": null,
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "explain stuff",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "f5529bda-867c-43de-b965-865895533d3a"
+    }
+   },
+   {
+    "type": "ai",
+    "data": {
+     "content": "Ah, I see now.\nLine 0: detail detail detail\nLine 1: detail detail detail\nLine 2: detail detail detail\nLine 3: detail detail detail\nLine 4: detail detail detail\nLine 5: detail detail detail\nLine 6: detail detail detail\nLine 7: detail detail detail\nLine 8: detail detail detail\nLine 9: detail detail detail\nLine 10: detail detail detail\nLine 11: detail detail detail\nLine 12: detail detail detail\nLine 13: detail detail detail\nLine 14: detail detail detail\nLine 15: detail detail detail\nLine 16: detail detail detail\nLine 17: detail detail detail\nLine 18: detail detail detail\nLine 19: detail detail detail\nLine 20: detail detail detail\nLine 21: detail detail detail\nLine 22: detail detail detail\nLine 23: detail detail detail\nLine 24: detail detail detail\nLine 25: detail detail detail\nLine 26: detail detail detail\nLine 27: detail detail detail\nLine 28: detail detail detail\nLine 29: detail detail detail\nLine 30: detail detail detail\nLine 31: detail detail detail\nLine 32: detail detail detail\nLine 33: detail detail detail\nLine 34: detail detail detail\nLine 35: detail detail detail\nLine 36: detail detail detail\nLine 37: detail detail detail\nLine 38: detail detail detail\nLine 39: detail detail detail\nLine 40: detail detail detail\nLine 41: detail detail detail\nLine 42: detail detail detail\nLine 43: detail detail detail\nLine 44: detail detail detail\nLine 45: detail detail detail\nLine 46: detail detail detail\nLine 47: detail detail detail\nLine 48: detail detail detail\nLine 49: detail detail detail\nLine 50: detail detail detail\nLine 51: detail detail detail\nLine 52: detail detail detail\nLine 53: detail detail detail\nLine 54: detail detail detail\nLine 55: detail detail detail\nLine 56: detail detail detail\nLine 57: detail detail detail\nLine 58: detail detail detail\nLine 59: detail detail detail",
+     "additional_kwargs": {
+      "refusal": null
+     },
+     "response_metadata": {
+      "token_usage": {
+       "completion_tokens": 1,
+       "prompt_tokens": 1,
+       "total_tokens": 2,
+       "completion_tokens_details": null,
+       "prompt_tokens_details": null
+      },
+      "model_provider": "openai",
+      "model_name": "mock",
+      "system_fingerprint": null,
+      "id": "1",
+      "finish_reason": "stop",
+      "logprobs": null
+     },
+     "type": "ai",
+     "name": null,
+     "id": "lc_run--019eca9a-4afe-7c13-bb8a-9222fcfcb925-0",
+     "tool_calls": [],
+     "invalid_tool_calls": [],
+     "usage_metadata": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "total_tokens": 2,
+      "input_token_details": {},
+      "output_token_details": {}
+     }
+    }
+   }
+  ]
+ },
+ {
+  "id": "092659-1",
+  "turn": 1,
+  "label": "explain stuff",
+  "tree": null,
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "explain stuff",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "3f8cd56f-0813-4b22-92b0-29db1e1f8f38"
+    }
+   },
+   {
+    "type": "ai",
+    "data": {
+     "content": "Ah, I see now.\nLine 0: detail detail detail\nLine 1: detail detail detail\nLine 2: detail detail detail\nLine 3: detail detail detail\nLine 4: detail detail detail\nLine 5: detail detail detail\nLine 6: detail detail detail\nLine 7: detail detail detail\nLine 8: detail detail detail\nLine 9: detail detail detail\nLine 10: detail detail detail\nLine 11: detail detail detail\nLine 12: detail detail detail\nLine 13: detail detail detail\nLine 14: detail detail detail\nLine 15: detail detail detail\nLine 16: detail detail detail\nLine 17: detail detail detail\nLine 18: detail detail detail\nLine 19: detail detail detail\nLine 20: detail detail detail\nLine 21: detail detail detail\nLine 22: detail detail detail\nLine 23: detail detail detail\nLine 24: detail detail detail\nLine 25: detail detail detail\nLine 26: detail detail detail\nLine 27: detail detail detail\nLine 28: detail detail detail\nLine 29: detail detail detail\nLine 30: detail detail detail\nLine 31: detail detail detail\nLine 32: detail detail detail\nLine 33: detail detail detail\nLine 34: detail detail detail\nLine 35: detail detail detail\nLine 36: detail detail detail\nLine 37: detail detail detail\nLine 38: detail detail detail\nLine 39: detail detail detail\nLine 40: detail detail detail\nLine 41: detail detail detail\nLine 42: detail detail detail\nLine 43: detail detail detail\nLine 44: detail detail detail\nLine 45: detail detail detail\nLine 46: detail detail detail\nLine 47: detail detail detail\nLine 48: detail detail detail\nLine 49: detail detail detail\nLine 50: detail detail detail\nLine 51: detail detail detail\nLine 52: detail detail detail\nLine 53: detail detail detail\nLine 54: detail detail detail\nLine 55: detail detail detail\nLine 56: detail detail detail\nLine 57: detail detail detail\nLine 58: detail detail detail\nLine 59: detail detail detail",
+     "additional_kwargs": {
+      "refusal": null
+     },
+     "response_metadata": {
+      "token_usage": {
+       "completion_tokens": 1,
+       "prompt_tokens": 1,
+       "total_tokens": 2,
+       "completion_tokens_details": null,
+       "prompt_tokens_details": null
+      },
+      "model_provider": "openai",
+      "model_name": "mock",
+      "system_fingerprint": null,
+      "id": "1",
+      "finish_reason": "stop",
+      "logprobs": null
+     },
+     "type": "ai",
+     "name": null,
+     "id": "lc_run--019eca9b-0c77-7193-afae-692264ab18bb-0",
+     "tool_calls": [],
+     "invalid_tool_calls": [],
+     "usage_metadata": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "total_tokens": 2,
+      "input_token_details": {},
+      "output_token_details": {}
+     }
+    }
+   }
+  ]
+ },
+ {
+  "id": "093014-1",
+  "turn": 1,
+  "label": "explain stuff",
+  "tree": null,
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "explain stuff",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "8200a672-0526-420a-ab55-b95f947e829b"
+    }
+   },
+   {
+    "type": "ai",
+    "data": {
+     "content": "Ah, I see now.\nLine 0: detail detail detail\nLine 1: detail detail detail\nLine 2: detail detail detail\nLine 3: detail detail detail\nLine 4: detail detail detail\nLine 5: detail detail detail\nLine 6: detail detail detail\nLine 7: detail detail detail\nLine 8: detail detail detail\nLine 9: detail detail detail\nLine 10: detail detail detail\nLine 11: detail detail detail\nLine 12: detail detail detail\nLine 13: detail detail detail\nLine 14: detail detail detail\nLine 15: detail detail detail\nLine 16: detail detail detail\nLine 17: detail detail detail\nLine 18: detail detail detail\nLine 19: detail detail detail\nLine 20: detail detail detail\nLine 21: detail detail detail\nLine 22: detail detail detail\nLine 23: detail detail detail\nLine 24: detail detail detail\nLine 25: detail detail detail\nLine 26: detail detail detail\nLine 27: detail detail detail\nLine 28: detail detail detail\nLine 29: detail detail detail\nLine 30: detail detail detail\nLine 31: detail detail detail\nLine 32: detail detail detail\nLine 33: detail detail detail\nLine 34: detail detail detail\nLine 35: detail detail detail\nLine 36: detail detail detail\nLine 37: detail detail detail\nLine 38: detail detail detail\nLine 39: detail detail detail\nLine 40: detail detail detail\nLine 41: detail detail detail\nLine 42: detail detail detail\nLine 43: detail detail detail\nLine 44: detail detail detail\nLine 45: detail detail detail\nLine 46: detail detail detail\nLine 47: detail detail detail\nLine 48: detail detail detail\nLine 49: detail detail detail\nLine 50: detail detail detail\nLine 51: detail detail detail\nLine 52: detail detail detail\nLine 53: detail detail detail\nLine 54: detail detail detail\nLine 55: detail detail detail\nLine 56: detail detail detail\nLine 57: detail detail detail\nLine 58: detail detail detail\nLine 59: detail detail detail",
+     "additional_kwargs": {
+      "refusal": null
+     },
+     "response_metadata": {
+      "token_usage": {
+       "completion_tokens": 1,
+       "prompt_tokens": 1,
+       "total_tokens": 2,
+       "completion_tokens_details": null,
+       "prompt_tokens_details": null
+      },
+      "model_provider": "openai",
+      "model_name": "mock",
+      "system_fingerprint": null,
+      "id": "1",
+      "finish_reason": "stop",
+      "logprobs": null
+     },
+     "type": "ai",
+     "name": null,
+     "id": "lc_run--019eca9e-056b-7802-8f06-1b8095a384bd-0",
+     "tool_calls": [],
+     "invalid_tool_calls": [],
+     "usage_metadata": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "total_tokens": 2,
+      "input_token_details": {},
+      "output_token_details": {}
+     }
+    }
+   }
+  ]
+ },
+ {
+  "id": "093433-1",
+  "turn": 1,
+  "label": "explain stuff",
+  "tree": null,
+  "messages": [
+   {
+    "type": "human",
+    "data": {
+     "content": "explain stuff",
+     "additional_kwargs": {},
+     "response_metadata": {},
+     "type": "human",
+     "name": null,
+     "id": "26b1b09b-e97c-4d40-8b38-1144d7bc73c0"
+    }
+   },
+   {
+    "type": "ai",
+    "data": {
+     "content": "Ah, I see now.\nLine 0: detail detail detail\nLine 1: detail detail detail\nLine 2: detail detail detail\nLine 3: detail detail detail\nLine 4: detail detail detail\nLine 5: detail detail detail\nLine 6: detail detail detail\nLine 7: detail detail detail\nLine 8: detail detail detail\nLine 9: detail detail detail\nLine 10: detail detail detail\nLine 11: detail detail detail\nLine 12: detail detail detail\nLine 13: detail detail detail\nLine 14: detail detail detail\nLine 15: detail detail detail\nLine 16: detail detail detail\nLine 17: detail detail detail\nLine 18: detail detail detail\nLine 19: detail detail detail\nLine 20: detail detail detail\nLine 21: detail detail detail\nLine 22: detail detail detail\nLine 23: detail detail detail\nLine 24: detail detail detail\nLine 25: detail detail detail\nLine 26: detail detail detail\nLine 27: detail detail detail\nLine 28: detail detail detail\nLine 29: detail detail detail\nLine 30: detail detail detail\nLine 31: detail detail detail\nLine 32: detail detail detail\nLine 33: detail detail detail\nLine 34: detail detail detail\nLine 35: detail detail detail\nLine 36: detail detail detail\nLine 37: detail detail detail\nLine 38: detail detail detail\nLine 39: detail detail detail\nLine 40: detail detail detail\nLine 41: detail detail detail\nLine 42: detail detail detail\nLine 43: detail detail detail\nLine 44: detail detail detail\nLine 45: detail detail detail\nLine 46: detail detail detail\nLine 47: detail detail detail\nLine 48: detail detail detail\nLine 49: detail detail detail\nLine 50: detail detail detail\nLine 51: detail detail detail\nLine 52: detail detail detail\nLine 53: detail detail detail\nLine 54: detail detail detail\nLine 55: detail detail detail\nLine 56: detail detail detail\nLine 57: detail detail detail\nLine 58: detail detail detail\nLine 59: detail detail detail",
+     "additional_kwargs": {
+      "refusal": null
+     },
+     "response_metadata": {
+      "token_usage": {
+       "completion_tokens": 1,
+       "prompt_tokens": 1,
+       "total_tokens": 2,
+       "completion_tokens_details": null,
+       "prompt_tokens_details": null
+      },
+      "model_provider": "openai",
+      "model_name": "mock",
+      "system_fingerprint": null,
+      "id": "1",
+      "finish_reason": "stop",
+      "logprobs": null
+     },
+     "type": "ai",
+     "name": null,
+     "id": "lc_run--019ecaa1-fa9b-7d82-90b2-82ad68caa913-0",
+     "tool_calls": [],
+     "invalid_tool_calls": [],
+     "usage_metadata": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "total_tokens": 2,
+      "input_token_details": {},
+      "output_token_details": {}
+     }
+    }
+   }
+  ]
  }
 ]
