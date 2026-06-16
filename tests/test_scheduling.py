@@ -364,3 +364,95 @@ async def test_daemon_picks_up_schedules_added_after_start(tmp_path, monkeypatch
         add_schedule_after_first_tick(),
     )
     assert "late" in fires
+
+
+# ── 🗣️ NL→cron (M50) ──────────────────────────────────────────────────
+
+
+import pytest as _pytest  # already imported above; alias to keep the section self-contained
+
+
+@_pytest.mark.asyncio
+async def test_parse_nl_to_cron_basic():
+    """A clean LLM response is accepted and validated."""
+    async def fake_llm(system, user):
+        # Verify the prompt actually carries the NL phrase.
+        assert "every morning at 9" in user
+        return "0 9 * * *"
+
+    cron = await sch.parse_nl_to_cron("every morning at 9", fake_llm)
+    assert cron == "0 9 * * *"
+
+
+@_pytest.mark.asyncio
+async def test_parse_nl_to_cron_strips_backticks_and_prose():
+    """LLMs love wrapping cron in `…` or prefixing prose. We grab the
+    first non-empty line and strip ornaments."""
+    async def fake_llm(_sys, _user):
+        return "`0 9 * * *`"
+    assert await sch.parse_nl_to_cron("morning", fake_llm) == "0 9 * * *"
+
+    async def multiline(_sys, _user):
+        return "\n\n0 9 * * *\nSure!\n"
+    assert await sch.parse_nl_to_cron("morning", multiline) == "0 9 * * *"
+
+
+@_pytest.mark.asyncio
+async def test_parse_nl_to_cron_rejects_garbage():
+    async def fake_llm(_sys, _user):
+        return "I don't know"
+    with _pytest.raises(ValueError):
+        await sch.parse_nl_to_cron("morning", fake_llm)
+
+    async def empty(_sys, _user):
+        return "   "
+    with _pytest.raises(ValueError):
+        await sch.parse_nl_to_cron("morning", empty)
+
+
+# ── 🎟️ rolling session (M50) ──────────────────────────────────────────
+
+
+@_pytest.mark.asyncio
+async def test_rolling_session_is_stamped_then_reused(tmp_path, monkeypatch):
+    """A schedule with resume=True should stamp session_id on the first
+    fire, and the factory should see that same session_id on the next
+    fire (so the rolling session actually rolls)."""
+    monkeypatch.chdir(tmp_path)
+    s = _make_schedule(prompt="ping", resume=True)
+    sch.save_schedule(s)
+
+    seen_resume_ids: list = []
+
+    def factory(sched):
+        # Capture the session_id passed to the runtime (what Runtime would
+        # see as `resume=...`). On fire #1 it's None; on fire #2 it should
+        # be the value we stamped during fire #1.
+        seen_resume_ids.append(sched.session_id)
+        # Echo a stable session_id back to be saved on fire #1.
+        return FakeRuntime(session_id="rolling-sess")
+
+    await sch.fire_schedule(s, runtime_factory=factory)
+    after_first = sch.get_schedule(s.id)
+    assert after_first.session_id == "rolling-sess"
+
+    # Fire again with the reloaded schedule.
+    await sch.fire_schedule(after_first, runtime_factory=factory)
+
+    assert seen_resume_ids == [None, "rolling-sess"]
+
+
+@_pytest.mark.asyncio
+async def test_fresh_session_when_resume_false(tmp_path, monkeypatch):
+    """resume=False is the default; session_id should stay None across
+    fires so each call uses a brand-new session."""
+    monkeypatch.chdir(tmp_path)
+    s = _make_schedule(prompt="ping")  # resume defaults to False
+    sch.save_schedule(s)
+
+    def factory(_sched):
+        return FakeRuntime(session_id="ephemeral")
+
+    await sch.fire_schedule(s, runtime_factory=factory)
+    after = sch.get_schedule(s.id)
+    assert after.session_id is None  # not stamped because resume=False

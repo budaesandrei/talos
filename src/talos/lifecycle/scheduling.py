@@ -562,3 +562,47 @@ async def daemon_loop(
         await asyncio.gather(*in_flight.values(), return_exceptions=True)
     log("📅 daemon stopped")
     return ticks
+
+
+# ── 🗣️ natural-language → cron (M50) ───────────────────────────────────
+
+
+NL_TO_CRON_PROMPT = (
+    "You convert natural-language schedule descriptions into a 5-field cron "
+    "expression (minute hour day-of-month month day-of-week).\n\n"
+    "Reply with EXACTLY the cron expression and nothing else — no prose, no "
+    "code fences, no explanation. If the description is ambiguous, pick the "
+    "most likely interpretation. Day-of-week: 0=Sun, 1=Mon, …, 6=Sat.\n\n"
+    "Examples:\n"
+    '  "every morning at 9" → 0 9 * * *\n'
+    '  "every weekday at 9am" → 0 9 * * 1-5\n'
+    '  "every Monday at 6pm" → 0 18 * * 1\n'
+    '  "every hour" → 0 * * * *\n'
+    '  "every 15 minutes" → */15 * * * *\n'
+    '  "the first of every month at noon" → 0 12 1 * *\n'
+    '  "every Sunday at midnight" → 0 0 * * 0\n'
+)
+
+
+def _strip_to_cron(text: str) -> str:
+    """LLMs love to wrap things in backticks or add 'sure!' prefixes.
+    Grab the first non-empty line and strip the usual ornaments."""
+    for raw in text.strip().splitlines():
+        line = raw.strip().strip("`").strip()
+        if line:
+            return line
+    return ""
+
+
+async def parse_nl_to_cron(nl: str, llm_call) -> str:
+    """Translate ``nl`` to a 5-field cron via the model.
+
+    ``llm_call`` is an async callable ``(system_prompt, user) -> str`` —
+    injected so tests can supply a fake without touching the real
+    ChatOpenAI wiring. Raises ``ValueError`` if the model returns garbage.
+    """
+    raw = await llm_call(NL_TO_CRON_PROMPT, nl)
+    cron = _strip_to_cron(raw)
+    if not cron:
+        raise ValueError(f"empty cron from model for input: {nl!r}")
+    return validate_cron(cron)

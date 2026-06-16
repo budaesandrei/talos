@@ -312,39 +312,116 @@ def _schedule_table(scheds) -> Table:
 @schedule_app.command("add")
 def schedule_add(
     prompt: str = typer.Argument(..., help="The prompt the agent will run on each fire."),
-    cron: str = typer.Option(..., "--cron", "-c", help='Cron expression, e.g. "0 9 * * *" for 9am daily.'),
+    when: Optional[str] = typer.Option(
+        None, "--when", "-w",
+        help='Cron OR natural language ("every morning at 9"). NL parses via the LLM.',
+    ),
+    cron: Optional[str] = typer.Option(
+        None, "--cron", "-c",
+        help='Cron expression — skips LLM parsing. Mutually exclusive with --when.',
+    ),
     name: Optional[str] = typer.Option(None, "--name", "-n", help="Schedule id (defaults to a slug of the prompt)."),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the model just for this schedule."),
     yolo: bool = typer.Option(False, "--yolo", help="🛡️  Required if the schedule uses mutating tools — nobody's around to approve."),
-    resume: bool = typer.Option(False, "--resume", help="🎟️  Use a rolling session that grows across fires (M50)."),
-    tz: Optional[str] = typer.Option(None, "--tz", help="IANA timezone for cron interpretation (M50+)."),
+    resume: bool = typer.Option(False, "--resume", help="🎟️  Use one rolling session that grows across fires (vs a fresh session each fire)."),
+    tz: Optional[str] = typer.Option(None, "--tz", help="IANA timezone for cron interpretation (informational; not yet enforced)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the 'save this schedule?' confirmation prompt."),
 ) -> None:
-    """➕ Add a scheduled task."""
-    from talos.lifecycle.scheduling import (
-        Schedule, list_schedules, save_schedule, slugify, unique_id,
-        upcoming_fires, validate_cron,
-    )
+    """➕ Add a scheduled task.
 
-    try:
-        cron = validate_cron(cron)
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1)
-    except RuntimeError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(2)
+    Two ways to express the schedule:
 
-    sid = unique_id(name or slugify(prompt), (s.id for s in list_schedules()))
-    sched = Schedule(
-        id=sid, prompt=prompt, cron=cron, tz=tz, model=model, yolo=yolo, resume=resume,
-    )
-    save_schedule(sched)
-    console.print(f"[green]📅 added [bold]{sid}[/][/] — {prompt}")
+      talos schedule add "summarize my inbox" --when "every morning at 9"
+      talos schedule add "summarize my inbox" --cron "0 9 * * *"
+
+    --when accepts cron OR natural language; cron syntax is tried first,
+    and if it's not valid cron we ask the LLM to translate. Either way we
+    show the resolved cron and the next 3 fire times and ask you to
+    confirm — the human gate from the /plan flow, applied to scheduling.
+    """
+    import asyncio
     from datetime import datetime as _dt
-    upcoming = upcoming_fires(cron, _dt.now(), 3)
+
+    from talos.lifecycle.scheduling import (
+        Schedule, list_schedules, parse_nl_to_cron, save_schedule, slugify,
+        unique_id, upcoming_fires, validate_cron,
+    )
+
+    if cron and when:
+        console.print("[red]use either --cron or --when, not both[/]")
+        raise typer.Exit(1)
+    if not cron and not when:
+        console.print("[red]missing schedule — pass --when 'every morning at 9' "
+                      "or --cron '0 9 * * *'[/]")
+        raise typer.Exit(1)
+
+    resolved: str
+    if cron:
+        try:
+            resolved = validate_cron(cron)
+        except (ValueError, RuntimeError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+    else:
+        # 🗣️ --when path: try cron first (fast, free), fall back to the LLM.
+        assert when is not None
+        try:
+            resolved = validate_cron(when)
+        except ValueError:
+            console.print(f"[dim]🗣️  parsing '{when}' via the model…[/]")
+            try:
+                async def _llm_call(system: str, user: str) -> str:
+                    # late imports keep `talos --help` fast
+                    from langchain_core.messages import (
+                        HumanMessage as HM, SystemMessage as SM,
+                    )
+                    from talos.agent.llm import build_llm
+                    from talos.agent.runtime import get_message_text
+
+                    msg = await build_llm().ainvoke(
+                        [SM(content=system), HM(content=user)]
+                    )
+                    return get_message_text(msg)
+
+                resolved = asyncio.run(parse_nl_to_cron(when, _llm_call))
+            except ValueError as exc:
+                console.print(f"[red]🗣️  couldn't parse a cron from {when!r}: {exc}[/]")
+                raise typer.Exit(1)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]🗣️  LLM call failed: {exc}[/]")
+                console.print(
+                    "[dim]tip: pass a cron explicitly with --cron, "
+                    "or check your TALOS_BASE_URL / TALOS_API_KEY in .env[/]"
+                )
+                raise typer.Exit(2)
+        except RuntimeError as exc:  # croniter not installed
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2)
+
+    # 🚦 the human gate — show the resolved cron and the next 3 fires.
+    console.print(f"[cyan]📅 resolved cron:[/] [magenta]{resolved}[/]")
+    upcoming = upcoming_fires(resolved, _dt.now(), 3)
     console.print("[dim]next fires:[/]")
     for ts in upcoming:
         console.print(f"  [magenta]→[/] {ts.strftime('%Y-%m-%d %H:%M')}")
+    if not yes:
+        try:
+            console.print(r"[yellow]save this schedule? \[Y/n] ›[/] ", end="")
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if answer and not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+
+    sid = unique_id(name or slugify(prompt), (s.id for s in list_schedules()))
+    sched = Schedule(
+        id=sid, prompt=prompt, cron=resolved, tz=tz, model=model, yolo=yolo,
+        resume=resume,
+    )
+    save_schedule(sched)
+    console.print(f"[green]📅 added [bold]{sid}[/][/] — {prompt}")
     console.print("[dim]start the daemon with: talos schedule run[/]")
 
 
