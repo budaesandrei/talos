@@ -1386,3 +1386,39 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
             console.print(f"[dim]🧜 opened {path}[/]")
         else:
             console.print("[dim]no mermaid blocks in the last reply[/]")
+    elif name == "/runs":
+        # 📬 List recent scheduled-task runs and mark them read. The
+        # daemon writes runs to .talos/schedules/<id>/runs/; this is the
+        # in-chat way to see what fired while you were away.
+        from talos.lifecycle.scheduling import all_runs, mark_all_read
+
+        runs = all_runs(limit_per_schedule=10)
+        if not runs:
+            console.print("[dim]📬 no scheduled runs yet — "
+                          "try: talos schedule add 'do X' --when 'every morning at 9'[/]")
+            return
+        table = Table(title=f"📬 scheduled runs ({len(runs)})", show_header=True,
+                      header_style="dim")
+        table.add_column("when", style="cyan", no_wrap=True)
+        table.add_column("schedule", style="magenta")
+        table.add_column("✓", justify="center")
+        table.add_column("dur", justify="right")
+        table.add_column("response", style="dim")
+        icons = {"ok": "[green]✅[/]", "error": "[red]💥[/]",
+                 "skipped": "[yellow]⏭[/]"}
+        for r in runs[:25]:
+            resp = (r.get("response") or "").splitlines()
+            head = (resp[0] if resp else "")[:80]
+            dur = r.get("duration_s")
+            unread_mark = "" if r.get("read") else " [bold #ffd75f]•[/]"
+            table.add_row(
+                r.get("started_at", "?") + unread_mark,
+                r.get("schedule_id", "?"),
+                icons.get(r.get("status"), "·"),
+                f"{dur:.1f}s" if dur is not None else "·",
+                head,
+            )
+        console.print(table)
+        flipped = mark_all_read()
+        if flipped:
+            console.print(f"[dim]📬 marked {flipped} run(s) read[/]")

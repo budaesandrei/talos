@@ -96,6 +96,22 @@ def print_banner(
     if resumed:
         info += f" · [dim]💾 {resumed} messages[/]"
     _centered(console, info)
+
+    # 📬 surface unread scheduled-task runs (M51) — only when there are
+    # any, so the banner stays clean when scheduling isn't being used.
+    try:
+        from talos.lifecycle.scheduling import unread_count
+
+        unread = unread_count()
+    except Exception:
+        unread = 0
+    if unread:
+        _centered(
+            console,
+            f"[bold #ffd75f]📬 {unread} scheduled run{'s' if unread != 1 else ''} "
+            "since last open[/]  [dim]· /runs to view[/]",
+        )
+
     _centered(console, f"[dim]💡 {random.choice(TIPS)}[/]")
     _centered(console, "[dim]/help for commands · /exit to leave[/]")
     console.print()

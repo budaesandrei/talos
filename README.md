@@ -23,6 +23,7 @@ Every feature category a modern agent has, implemented minimally:
 | ♾️ Compaction + graph memory | `memory/compaction.py`, `memory/graph_memory.py` | [13 — long-running](docs/13-long-running.md) |
 | ⏪ Checkpoints · verifier · skill synthesis | `memory/checkpoints.py`, `lifecycle/skill_synthesis.py` | [14 — time travel](docs/14-time-travel.md) |
 | 🔄 /evolve lifecycle | `lifecycle/evolve.py` | [15 — evolve](docs/15-evolve.md) |
+| 📅 Scheduled tasks | `lifecycle/scheduling.py` | [16 — scheduled tasks](docs/16-scheduled-tasks.md) |
 | 🔗 Cross-agent linking · 👥 teams · 👁 vision · 🚧 policy · 🔭 tracing | various | see docs |
 
 ## 🚀 Quickstart
@@ -108,6 +109,7 @@ git checkout <hash>      # time-travel to any milestone and poke around
 | M29–M32 | conversation chrome, /models hang+pricing fixes, Textual TUI |
 | M33–M38 | auto-compaction, GraphRAG memory, time-travel /rewind, verifier, policy+sandbox, OTel tracing |
 | M39–M44 | cross-agent linking, skill synthesis, parallel teams, vision, /init, /evolve ouroboros |
+| M49–M51 | scheduled tasks: cron daemon, NL→cron with human gate, in-chat surfacing |
 
 Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
 

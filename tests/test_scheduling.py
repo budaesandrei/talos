@@ -456,3 +456,53 @@ async def test_fresh_session_when_resume_false(tmp_path, monkeypatch):
     await sch.fire_schedule(s, runtime_factory=factory)
     after = sch.get_schedule(s.id)
     assert after.session_id is None  # not stamped because resume=False
+
+
+# ── 📬 chat-time surfacing (M51) ──────────────────────────────────────
+
+
+def test_runs_command_in_help_text(tmp_path, monkeypatch):
+    """/runs should appear in /help so users discover it."""
+    from talos.ui.commands import BUILTINS, help_text
+    assert "/runs" in BUILTINS
+    monkeypatch.chdir(tmp_path)
+    assert "/runs" in help_text()
+
+
+def test_runs_dispatch(tmp_path, monkeypatch):
+    """`/runs` is a builtin — dispatch should route it that way."""
+    from talos.ui.commands import dispatch
+    monkeypatch.chdir(tmp_path)
+    assert dispatch("/runs") == ("builtin", "/runs")
+
+
+def test_unread_count_drops_to_zero_after_mark_read(tmp_path, monkeypatch):
+    """End-to-end: write some runs, count unread, mark read, recount."""
+    monkeypatch.chdir(tmp_path)
+    s = _make_schedule()
+    sch.save_schedule(s)
+    for h in (9, 10, 11):
+        sch.write_run(
+            s.id, datetime(2026, 6, 15, h), datetime(2026, 6, 15, h, 0, 1),
+            status="ok", prompt="hi", response=f"reply {h}",
+        )
+    assert sch.unread_count() == 3
+    sch.mark_all_read()
+    assert sch.unread_count() == 0
+
+
+def test_all_runs_sorted_newest_first(tmp_path, monkeypatch):
+    """all_runs() across multiple schedules must merge and sort by time."""
+    monkeypatch.chdir(tmp_path)
+    a = sch.Schedule(id="a", prompt="A", cron="* * * * *")
+    b = sch.Schedule(id="b", prompt="B", cron="* * * * *")
+    sch.save_schedule(a)
+    sch.save_schedule(b)
+    sch.write_run(a.id, datetime(2026, 6, 15, 9), datetime(2026, 6, 15, 9, 0, 1),
+                  status="ok", prompt="A", response="A")
+    sch.write_run(b.id, datetime(2026, 6, 15, 10), datetime(2026, 6, 15, 10, 0, 1),
+                  status="ok", prompt="B", response="B")
+    sch.write_run(a.id, datetime(2026, 6, 15, 11), datetime(2026, 6, 15, 11, 0, 1),
+                  status="ok", prompt="A", response="A2")
+    out = sch.all_runs()
+    assert [r["response"] for r in out] == ["A2", "B", "A"]

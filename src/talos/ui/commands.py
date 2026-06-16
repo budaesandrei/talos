@@ -26,6 +26,7 @@ BUILTINS = {
     "/models": "list the provider's models, switch the active one",
     "/plan": "🗺️ plan before doing: /plan <task> (AI-DLC style)",
     "/evolve": "🔄 lifecycle loop: debt → persona research → requirements → plan",
+    "/runs": "📬 show recent scheduled-task runs (📅 talos schedule …)",
     "/exit": "quit (also /quit)",
 }
 
