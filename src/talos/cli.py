@@ -710,3 +710,67 @@ def self_review(
     if tests:
         console.print("\n[bold]Tests:[/]")
         console.print(cand.test_output or "(none)", highlight=False, markup=False)
+
+
+@self_app.command("apply")
+def self_apply(
+    edit_id: str = typer.Argument(..., help="Candidate id from `talos self review`."),
+    force: bool = typer.Option(False, "--force", help="Override the protected-files refusal. Be careful."),
+    no_commit: bool = typer.Option(False, "--no-commit", help="Apply the diff to the working tree but don't auto-commit."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """🧩 Apply a self-edit candidate to the main checkout.
+
+    Requires the candidate to have passed tests; --force overrides
+    protected-file refusal. After a successful apply you should
+    restart any running Talos process — the in-memory code may no
+    longer match what's on disk.
+    """
+    from talos.lifecycle.self_edit import apply_candidate, load_candidate
+
+    cand = load_candidate(edit_id)
+    if cand is None:
+        console.print(f"[red]no candidate named {edit_id!r}[/]")
+        raise typer.Exit(1)
+    if not cand.test_passed:
+        console.print("[red]🚫 refusing to apply — tests failed for this candidate[/]")
+        console.print(f"[dim]see: talos self review {edit_id} --tests[/]")
+        raise typer.Exit(2)
+    if cand.verifier_verdict and cand.verifier_verdict.get("recommendation") == "reject":
+        console.print("[red]🚫 refusing to apply — verifier recommended REJECT[/]")
+        console.print(f"[dim]see: talos self review {edit_id}[/]")
+        raise typer.Exit(2)
+    if cand.protected_violations and not force:
+        console.print(
+            "[red]🛡️  refusing to apply — touches protected file(s):[/]"
+        )
+        for f in cand.protected_violations:
+            console.print(f"  · {f}")
+        console.print(
+            "[dim]use --force to override (and read each file change first)[/]"
+        )
+        raise typer.Exit(3)
+
+    console.print(f"[cyan]about to apply [bold]{edit_id}[/]:[/] {cand.request}")
+    console.print(f"  · {len(cand.files_changed)} file(s) will change")
+    if not yes:
+        try:
+            console.print(r"[yellow]proceed? \[y/N] ›[/] ", end="")
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+
+    ok, msg = apply_candidate(edit_id, force=force, commit=not no_commit)
+    if ok:
+        console.print(f"[green]✅ {msg}[/]")
+        console.print(
+            "[yellow]restart any running Talos process — the in-memory code "
+            "may no longer match what's on disk.[/]"
+        )
+    else:
+        console.print(f"[red]💥 {msg}[/]")
+        raise typer.Exit(1)

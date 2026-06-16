@@ -233,3 +233,210 @@ def test_make_edit_id_includes_request_slug():
     # 8-char date + dash + 6-char time + dash + slug
     head = eid[:15]
     assert head[8] == "-" and head[:8].isdigit() and head[9:].isdigit()
+
+
+# ── 🛡️ M54: protected-files allowlist ──────────────────────────────────
+
+
+def test_protected_files_list_includes_critical_paths():
+    """The minimum allowlist: safety machinery + self-edit code + tests."""
+    must_protect = {
+        "src/talos/infra/policy.py",
+        "src/talos/infra/permissions.py",
+        "src/talos/infra/sandbox.py",
+        "src/talos/lifecycle/self_edit.py",
+        "src/talos/lifecycle/self_knowledge.py",
+        "src/talos/lifecycle/scheduling.py",
+        "tests/test_self_edit.py",
+        "tests/test_self_knowledge.py",
+    }
+    missing = must_protect - se.PROTECTED_FILES
+    assert not missing, f"expected these in PROTECTED_FILES: {missing}"
+
+
+def test_check_protected_violations_empty_when_clean():
+    assert se.check_protected_violations(["src/talos/cli.py"]) == []
+    assert se.check_protected_violations([]) == []
+
+
+def test_check_protected_violations_returns_sorted_subset():
+    files = [
+        "src/talos/lifecycle/self_edit.py",
+        "src/talos/cli.py",
+        "src/talos/infra/policy.py",
+        "src/talos/agent/runtime.py",
+    ]
+    violations = se.check_protected_violations(files)
+    assert violations == [
+        "src/talos/infra/policy.py",
+        "src/talos/lifecycle/self_edit.py",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_protected_violations_recorded_on_candidate(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    create, cleanup, _, _ = _fake_worktree_factory(tmp_path)
+
+    def sub_agent(worktree: Path, _r: str) -> str:
+        (worktree / "x").write_text("")
+        return "did the thing"
+
+    cand = await se.run_self_edit(
+        "rewrite policy.py",
+        create_worktree_fn=create,
+        cleanup_worktree_fn=cleanup,
+        sub_agent_fn=sub_agent,
+        diff_fn=_make_diff_fn(
+            "+evil", ["src/talos/infra/policy.py", "src/talos/cli.py"]
+        ),
+        test_fn=_make_test_fn(passed=True, output="ok"),
+    )
+    assert cand.protected_violations == ["src/talos/infra/policy.py"]
+
+
+# ── 🔍 M54: verifier ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_verifier_passes_when_fake_says_approve(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    create, cleanup, _, _ = _fake_worktree_factory(tmp_path)
+
+    async def fake_verifier(candidate):
+        return {
+            "passes_request": True,
+            "evidence": "the diff added the foo command",
+            "concerns": [],
+            "recommendation": "approve",
+        }
+
+    cand = await se.run_self_edit(
+        "add a foo command",
+        create_worktree_fn=create,
+        cleanup_worktree_fn=cleanup,
+        sub_agent_fn=lambda w, _r: (w / "foo.py").write_text("x") or "",
+        diff_fn=_make_diff_fn("+x", ["src/talos/cli.py"]),
+        test_fn=_make_test_fn(passed=True, output="ok"),
+        verifier_fn=fake_verifier,
+    )
+    assert cand.verifier_verdict["recommendation"] == "approve"
+
+
+@pytest.mark.asyncio
+async def test_verifier_skipped_when_no_changes(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    create, cleanup, _, _ = _fake_worktree_factory(tmp_path)
+    verifier_calls = []
+
+    async def fake_verifier(candidate):
+        verifier_calls.append(True)
+        return {"recommendation": "approve"}
+
+    await se.run_self_edit(
+        "no-op",
+        create_worktree_fn=create,
+        cleanup_worktree_fn=cleanup,
+        sub_agent_fn=lambda _w, _r: "did nothing",
+        diff_fn=_make_diff_fn("", []),
+        test_fn=_make_test_fn(),
+        verifier_fn=fake_verifier,
+    )
+    assert verifier_calls == []  # no diff → no verifier call
+
+
+@pytest.mark.asyncio
+async def test_verifier_crash_recorded_as_revise(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    create, cleanup, _, _ = _fake_worktree_factory(tmp_path)
+
+    async def bad_verifier(_c):
+        raise ConnectionError("LLM unreachable")
+
+    cand = await se.run_self_edit(
+        "edit",
+        create_worktree_fn=create,
+        cleanup_worktree_fn=cleanup,
+        sub_agent_fn=lambda w, _r: (w / "a.py").write_text("") or "",
+        diff_fn=_make_diff_fn("+", ["a.py"]),
+        test_fn=_make_test_fn(),
+        verifier_fn=bad_verifier,
+    )
+    assert cand.verifier_verdict["recommendation"] == "revise"
+    assert any("verifier crashed" in c for c in cand.verifier_verdict["concerns"])
+
+
+@pytest.mark.asyncio
+async def test_verify_candidate_handles_chatty_llm():
+    """parse_verdict needs to extract JSON from prose-wrapped replies."""
+    c = se.SelfEditCandidate(
+        edit_id="x", branch="y", request="add a foo command", diff="+x",
+        files_changed=["a.py"], test_passed=True, test_output="ok",
+    )
+    async def chatty_llm(_sys, _user):
+        return ("Sure! Here's my review:\n\n"
+                '{"passes_request": true, "evidence": "yep",'
+                ' "concerns": [], "recommendation": "approve"}\n\n'
+                "Let me know if you need more!")
+    verdict = await se.verify_candidate(c, chatty_llm)
+    assert verdict["recommendation"] == "approve"
+    assert verdict["passes_request"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_candidate_defaults_to_revise_on_garbage():
+    c = se.SelfEditCandidate(
+        edit_id="x", branch="y", request="r", diff="+x",
+        files_changed=["a.py"], test_passed=True, test_output="ok",
+    )
+    async def garbage_llm(_sys, _user):
+        return "no idea what you want"
+    verdict = await se.verify_candidate(c, garbage_llm)
+    assert verdict["recommendation"] == "revise"
+    assert verdict["passes_request"] is False
+
+
+# ── 🧩 M54: apply (refusal paths only — git ops are integration-tested) ──
+
+
+def test_apply_refuses_missing_candidate(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ok, msg = se.apply_candidate("does-not-exist")
+    assert ok is False and "no candidate" in msg
+
+
+def test_apply_refuses_empty_diff(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    c = se.SelfEditCandidate(
+        edit_id="e", branch="b", request="r", diff="",
+        files_changed=[], test_passed=True,
+    )
+    se.save_candidate(c)
+    ok, msg = se.apply_candidate("e")
+    assert ok is False and "empty" in msg.lower()
+
+
+def test_apply_refuses_protected_without_force(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    c = se.SelfEditCandidate(
+        edit_id="e", branch="b", request="r", diff="+ x",
+        files_changed=["src/talos/infra/policy.py"],
+        protected_violations=["src/talos/infra/policy.py"],
+        test_passed=True,
+    )
+    se.save_candidate(c)
+    ok, msg = se.apply_candidate("e", force=False)
+    assert ok is False
+    assert "protected" in msg.lower()
+    assert "policy.py" in msg
+
+
+def test_apply_refuses_already_applied(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    c = se.SelfEditCandidate(
+        edit_id="e", branch="b", request="r", diff="+x",
+        files_changed=["a.py"], test_passed=True, applied=True,
+    )
+    se.save_candidate(c)
+    ok, msg = se.apply_candidate("e")
+    assert ok is False and "already" in msg

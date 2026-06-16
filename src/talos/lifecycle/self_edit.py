@@ -276,7 +276,9 @@ async def run_self_edit(
     sub_agent_fn: Callable[[Path, str], str] | None = None,
     diff_fn: Callable[[Path], tuple[str, list[str]]] | None = None,
     test_fn: Callable[[Path], tuple[bool, str]] | None = None,
+    verifier_fn: Callable[[SelfEditCandidate], "object"] | None = None,
     skip_tests: bool = False,
+    skip_verifier: bool = False,
     log: Callable[[str], None] | None = None,
     keep_worktree: bool = False,
 ) -> SelfEditCandidate:
@@ -355,6 +357,12 @@ async def run_self_edit(
             except Exception as exc:  # noqa: BLE001
                 log(f"⚠️ cleanup failed (non-fatal): {exc}")
 
+    # 🛡️ Compute protected-file violations now so the reviewer sees them
+    # in `talos self review` regardless of test/verifier state.
+    violations = check_protected_violations(files)
+    if violations:
+        log(f"🛡️ protected file(s) touched: {', '.join(violations)}")
+
     candidate = SelfEditCandidate(
         edit_id=edit_id,
         branch=branch,
@@ -366,10 +374,199 @@ async def run_self_edit(
                     + ("\n\n--- sub-agent output ---\n" + sub_agent_output
                        if sub_agent_output else ""),
         sub_agent_error=sub_agent_error,
+        protected_violations=violations,
     )
+
+    # 🔍 Verifier runs after tests, only if we have something to verify.
+    if (verifier_fn is not None
+            and not skip_verifier
+            and files
+            and not sub_agent_error):
+        log("🔍 verifying candidate against the request")
+        try:
+            verdict = verifier_fn(candidate)
+            if asyncio.iscoroutine(verdict):
+                verdict = await verdict
+            if isinstance(verdict, dict):
+                candidate.verifier_verdict = verdict
+                rec = verdict.get("recommendation", "?")
+                log(f"🔍 verdict: {rec}")
+        except Exception as exc:  # noqa: BLE001 — verifier failure is data
+            candidate.verifier_verdict = {
+                "passes_request": False,
+                "evidence": "",
+                "concerns": [f"verifier crashed: {type(exc).__name__}: {exc}"],
+                "recommendation": "revise",
+            }
+
     save_candidate(candidate)
     log(
         f"📝 candidate {edit_id} saved → {candidate_dir(edit_id)} "
         f"({len(files)} file(s) changed, tests {'✅' if test_passed else '❌'})"
     )
     return candidate
+
+
+# ── 🛡️ meta-protection: files the self-editor must not touch ──────────
+
+
+# The minimum allowlist. A self-edit that tries to modify any of these
+# is refused unless --force is passed. Without this list, one confused
+# edit can disable every other guardrail in a single commit.
+PROTECTED_FILES = frozenset({
+    # The safety machinery itself
+    "src/talos/infra/policy.py",
+    "src/talos/infra/permissions.py",
+    "src/talos/infra/sandbox.py",
+    # Scheduling — a hostile self-edit could add a malicious schedule
+    "src/talos/lifecycle/scheduling.py",
+    # The self-edit code (meta — the protector must be protected)
+    "src/talos/lifecycle/self_edit.py",
+    "src/talos/lifecycle/self_knowledge.py",
+    "src/talos/tools/self_tool.py",
+    # The test suite for self-edit (so a bad edit can't disable its own gate)
+    "tests/test_self_edit.py",
+    "tests/test_self_knowledge.py",
+})
+
+
+def check_protected_violations(files: list[str]) -> list[str]:
+    """Return the subset of ``files`` that are in PROTECTED_FILES.
+    Empty list = no violations."""
+    return sorted(set(files) & PROTECTED_FILES)
+
+
+# ── 🔍 verifier (M54) ─────────────────────────────────────────────────
+
+
+VERIFY_EDIT_PROMPT = """\
+You are a strict code reviewer judging whether a proposed code change
+to the Talos source tree satisfies the user's original request.
+
+Be skeptical. A diff that compiles and passes tests can still fail to
+satisfy the intent. Look for:
+
+- Does the diff actually do what was asked?
+- Does the diff touch files the request didn't ask about (scope creep)?
+- Does the diff introduce a new dependency or external call?
+- Does the diff weaken a safety check, gate, or test?
+
+Return STRICT JSON, no prose around it:
+
+{"passes_request": true|false,
+ "evidence": "one sentence pointing to specific lines/files",
+ "concerns": ["short string", "..."],
+ "recommendation": "approve" | "revise" | "reject"}
+"""
+
+
+async def verify_candidate(
+    candidate: SelfEditCandidate,
+    llm_call: Callable[[str, str], "object"],
+) -> dict:
+    """Score the candidate via the LLM. ``llm_call`` is async
+    ``(system, user) -> str`` — injected so tests use a fake.
+
+    Returns the parsed verdict dict. Never raises — a malformed reply
+    becomes ``{"passes_request": False, ..., "recommendation": "revise"}``
+    so the gate stays cautious by default.
+    """
+    from talos.lifecycle.planning import parse_verdict as _parse
+
+    user = (
+        f"REQUEST:\n{candidate.request}\n\n"
+        f"FILES CHANGED ({len(candidate.files_changed)}):\n"
+        + "\n".join(f"- {f}" for f in candidate.files_changed)
+        + f"\n\nTESTS: {'passed' if candidate.test_passed else 'FAILED'}\n\n"
+        f"DIFF:\n{candidate.diff or '(empty)'}\n"
+    )
+    try:
+        raw = await llm_call(VERIFY_EDIT_PROMPT, user)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "passes_request": False,
+            "evidence": "",
+            "concerns": [f"verifier call failed: {type(exc).__name__}: {exc}"],
+            "recommendation": "revise",
+        }
+    text = raw if isinstance(raw, str) else str(raw)
+    verdict = _parse(text)  # robust JSON extraction
+    # Coerce to our expected shape with sensible defaults
+    return {
+        "passes_request": bool(verdict.get("passes_request",
+                                            verdict.get("all_passed", False))),
+        "evidence": str(verdict.get("evidence", "")),
+        "concerns": list(verdict.get("concerns",
+                                      [u.get("gap", "") for u in
+                                       verdict.get("units", []) if u.get("gap")])),
+        "recommendation": str(verdict.get("recommendation", "revise")),
+    }
+
+
+# ── 🧩 apply (M54) ────────────────────────────────────────────────────
+
+
+def apply_candidate(
+    edit_id: str,
+    *,
+    repo: Path | None = None,
+    force: bool = False,
+    commit: bool = True,
+) -> tuple[bool, str]:
+    """Apply a candidate's diff to the main checkout.
+
+    Returns ``(success, message)``. On success the candidate's
+    ``applied`` flag is flipped and re-saved. Refuses to apply when
+    the candidate touched a protected file unless ``force=True``.
+
+    The Talos process should EXIT after a successful apply — the
+    running code may no longer match what's on disk."""
+    cand = load_candidate(edit_id)
+    if cand is None:
+        return False, f"no candidate named {edit_id!r}"
+    if cand.applied:
+        return False, f"{edit_id} is already marked applied"
+    if not cand.diff:
+        return False, "candidate has an empty diff"
+
+    if not force:
+        violations = check_protected_violations(cand.files_changed)
+        if violations:
+            return False, (
+                "refusing to apply — touches protected file(s):\n  "
+                + "\n  ".join(violations)
+                + "\n(use --force to override, but read each file first)"
+            )
+
+    if repo is None:
+        repo = repo_root_of()
+
+    # Apply the diff. --3way lets git try a content-level merge when the
+    # raw apply fails, which catches the common "main moved while the
+    # candidate was being reviewed" case.
+    patch_path = candidate_dir(edit_id) / "diff.patch"
+    if not patch_path.is_file():
+        return False, f"diff file missing: {patch_path}"
+    res = subprocess.run(
+        ["git", "-C", str(repo), "apply", "--3way", "--index", str(patch_path)],
+        capture_output=True, text=True, check=False,
+    )
+    if res.returncode != 0:
+        return False, (
+            "git apply failed — likely a conflict against main:\n"
+            + (res.stderr or res.stdout)
+        )
+
+    if commit:
+        msg = f"self-edit ({edit_id}): {cand.request.strip().splitlines()[0][:72]}\n\n" \
+              f"Generated by `talos self edit` and approved via `talos self apply`."
+        res = subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", msg],
+            capture_output=True, text=True, check=False,
+        )
+        if res.returncode != 0:
+            return False, "git commit failed:\n" + (res.stderr or res.stdout)
+
+    cand.applied = True
+    save_candidate(cand)
+    return True, f"applied {edit_id} to {repo}"
