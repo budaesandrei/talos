@@ -67,6 +67,18 @@ def build_system_prompt() -> str:
     if agents:
         parts.append(agents)
 
+    # 🪞 self-knowledge: a compact index of Talos's own source so the agent
+    # can answer "where would I add X?" without grepping. Lazy on errors —
+    # a malformed cache must never block the system prompt.
+    try:
+        from talos.lifecycle.self_knowledge import manifest_summary
+
+        index = manifest_summary()
+        if index:
+            parts.append(index)
+    except Exception:
+        pass
+
     if settings.workspace_snapshot:
         try:
             from talos.agent.workspace import snapshot

@@ -529,3 +529,86 @@ def schedule_run(
             max_ticks=1 if once else None,
         )
     )
+
+
+# ── 🪞 self-knowledge ──────────────────────────────────────────────────
+# `talos self show / refresh` — inspect and maintain Talos's manifest of
+# its own source tree. The compact form is already in the system prompt;
+# this is the human-facing view.
+
+self_app = typer.Typer(
+    no_args_is_help=True,
+    help="🪞 Inspect Talos's knowledge of its own source tree.",
+)
+app.add_typer(self_app, name="self")
+
+
+@self_app.command("show")
+def self_show(
+    package: Optional[str] = typer.Argument(
+        None, help='Filter to one subpackage (e.g. "memory", "tools"). '
+                   'Omit to show the full manifest.',
+    ),
+    refresh: bool = typer.Option(False, "--refresh", help="Regenerate the manifest before showing it."),
+    paths_only: bool = typer.Option(False, "--paths-only", help="Print just the file paths (one per line)."),
+) -> None:
+    """🪞 Print Talos's manifest of its own source tree."""
+    from talos.lifecycle.self_knowledge import by_package, manifest
+
+    facts = manifest(force_refresh=refresh)
+    if not facts:
+        console.print("[dim]🪞 no source files indexed — is this a fresh install?[/]")
+        return
+    if package:
+        facts = [f for f in facts if f.package == package]
+        if not facts:
+            console.print(f"[red]no package named {package!r}[/]")
+            raise typer.Exit(1)
+
+    if paths_only:
+        for f in facts:
+            console.print(f.path)
+        return
+
+    # Group by package; render as a table per package.
+    groups: dict[str, list] = {}
+    for f in facts:
+        groups.setdefault(f.package, []).append(f)
+    for pkg in sorted(groups, key=lambda p: ("a" if p == "core" else "b", p)):
+        items = groups[pkg]
+        table = Table(
+            title=f"🪞 {pkg}/ ({len(items)} file{'s' if len(items) != 1 else ''})",
+            show_header=True, header_style="dim",
+        )
+        table.add_column("file", style="cyan", no_wrap=False)
+        table.add_column("purpose")
+        for f in items:
+            table.add_row(f.path, f.purpose)
+        console.print(table)
+
+
+@self_app.command("refresh")
+def self_refresh() -> None:
+    """♻️  Force-regenerate the manifest cache (.talos/self/manifest.json)."""
+    from talos.lifecycle.self_knowledge import manifest, manifest_file
+
+    facts = manifest(force_refresh=True)
+    console.print(
+        f"[green]🪞 wrote {manifest_file()} — {len(facts)} module(s) indexed[/]"
+    )
+
+
+@self_app.command("read")
+def self_read(
+    file_path: str = typer.Argument(..., help='Path inside src/talos/, e.g. "memory/sessions.py".'),
+) -> None:
+    """📖 Print one file from Talos's source — the human-facing equivalent
+    of what the agent's ``read_self`` tool does."""
+    from talos.lifecycle.self_knowledge import deep_read
+
+    try:
+        text = deep_read(file_path)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    console.print(text, highlight=False)

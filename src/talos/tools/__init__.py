@@ -15,6 +15,7 @@ from talos.tools.recall_tool import recall_memory
 from talos.tools.skill_tool import load_skill
 from talos.tools.task_tool import task
 from talos.tools.team_tool import team
+from talos.tools.self_tool import read_self
 from talos.tools.web import web_fetch
 
 
@@ -32,6 +33,7 @@ def get_tools() -> list[BaseTool]:
         save_memory,
         load_skill,
         recall_memory,
+        read_self,
         task,
         team,
     ]

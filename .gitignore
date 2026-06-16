@@ -30,4 +30,8 @@ htmlcov/
 # Talos runtime state (keep agents/skills/commands tracked)
 .talos/sessions/
 .talos/memory.md
+.talos/checkpoints/
+.talos/schedules/
+.talos/self/
+.talos/self-edits/
 auth.py
