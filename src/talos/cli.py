@@ -612,3 +612,101 @@ def self_read(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
     console.print(text, highlight=False)
+
+
+@self_app.command("edit")
+def self_edit(
+    request: str = typer.Argument(..., help='What you want Talos to change about itself, in plain English.'),
+    skip_tests: bool = typer.Option(False, "--skip-tests", help="Skip the test gate (faster; not recommended)."),
+    keep_worktree: bool = typer.Option(False, "--keep-worktree", help="Don't delete the worktree afterwards — for poking around."),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model the sub-agent should use."),
+) -> None:
+    """🔧 Propose a self-edit. Runs a sub-agent in an isolated git
+    worktree, captures the diff, runs the test suite, and persists the
+    candidate to .talos/self-edits/<id>/ for review.
+
+    This produces a *candidate* — it does NOT apply anything to the main
+    checkout. Use `talos self review` to inspect candidates and `talos
+    self apply` (M54) to merge one in.
+    """
+    from talos.lifecycle.self_edit import default_sub_agent, run_self_edit
+
+    def _runner(worktree, req):
+        return default_sub_agent(worktree, req, model=model)
+
+    def _log(msg: str) -> None:
+        console.print(f"[dim]{msg}[/]")
+
+    try:
+        candidate = asyncio.run(run_self_edit(
+            request,
+            sub_agent_fn=_runner,
+            skip_tests=skip_tests,
+            keep_worktree=keep_worktree,
+            log=_log,
+        ))
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    icon = "✅" if candidate.test_passed else "❌"
+    console.print(
+        f"\n[green]📝 candidate [bold]{candidate.edit_id}[/]:[/] "
+        f"{len(candidate.files_changed)} file(s) changed, tests {icon}"
+    )
+    if candidate.files_changed:
+        for f in candidate.files_changed:
+            console.print(f"  [cyan]·[/] {f}")
+    if candidate.sub_agent_error:
+        console.print(f"[yellow]⚠️ sub-agent error: {candidate.sub_agent_error}[/]")
+    console.print(
+        f"[dim]review with: talos self review {candidate.edit_id}[/]"
+    )
+
+
+@self_app.command("review")
+def self_review(
+    edit_id: Optional[str] = typer.Argument(None, help="Candidate id (omit to list)."),
+    diff: bool = typer.Option(False, "--diff", help="Print the full diff."),
+    tests: bool = typer.Option(False, "--tests", help="Print the full pytest output."),
+) -> None:
+    """📋 List self-edit candidates, or show one in detail."""
+    from talos.lifecycle.self_edit import candidate_dir, list_candidates, load_candidate
+
+    if edit_id is None:
+        cands = list_candidates()
+        if not cands:
+            console.print("[dim]no self-edit candidates yet — try: talos self edit '...'[/]")
+            return
+        table = Table(title=f"📋 self-edit candidates ({len(cands)})")
+        table.add_column("id", style="cyan", no_wrap=True)
+        table.add_column("when", style="dim")
+        table.add_column("✓", justify="center")
+        table.add_column("files", justify="right")
+        table.add_column("request", style="dim")
+        for c in cands:
+            req = c.request if len(c.request) < 60 else c.request[:57] + "…"
+            icon = "[green]✅[/]" if c.test_passed else "[red]❌[/]"
+            table.add_row(c.edit_id, c.created_at, icon,
+                          str(len(c.files_changed)), req)
+        console.print(table)
+        return
+
+    cand = load_candidate(edit_id)
+    if cand is None:
+        console.print(f"[red]no candidate named {edit_id!r}[/]")
+        raise typer.Exit(1)
+    icon = "[green]✅[/]" if cand.test_passed else "[red]❌[/]"
+    console.print(f"[cyan]{cand.edit_id}[/]  ·  {icon}  ·  {cand.created_at}")
+    console.print(f"\n[bold]Request:[/] {cand.request}")
+    console.print(f"\n[bold]Files changed ({len(cand.files_changed)}):[/]")
+    for f in cand.files_changed:
+        console.print(f"  · {f}")
+    if cand.sub_agent_error:
+        console.print(f"\n[yellow]⚠️ sub-agent error:[/] {cand.sub_agent_error}")
+    console.print(f"\n[dim]→ {candidate_dir(cand.edit_id)}[/]")
+    if diff:
+        console.print("\n[bold]Diff:[/]")
+        console.print(cand.diff or "(empty)", highlight=False, markup=False)
+    if tests:
+        console.print("\n[bold]Tests:[/]")
+        console.print(cand.test_output or "(none)", highlight=False, markup=False)
