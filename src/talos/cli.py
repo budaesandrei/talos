@@ -774,3 +774,233 @@ def self_apply(
     else:
         console.print(f"[red]💥 {msg}[/]")
         raise typer.Exit(1)
+
+
+# ── 🔐 vault ────────────────────────────────────────────────────────────
+# `talos vault add/list/show/remove` — secrets and scoped values, three-tier.
+# Storage is OS keyring by default (M55); substitution + scrubbing lands in M56.
+
+vault_app = typer.Typer(
+    no_args_is_help=True,
+    help="🔐 Secrets and scoped values the agent uses by handle, never by plaintext.",
+)
+app.add_typer(vault_app, name="vault")
+
+
+def _vault_kind_icon(kind: str) -> str:
+    return "🔒" if kind == "secret" else "📝"
+
+
+def _vault_scope_icon(scope: str) -> str:
+    return {"session": "🟡", "project": "🔵", "global": "🟢"}.get(scope, "·")
+
+
+@vault_app.command("add")
+def vault_add(
+    handle: str = typer.Argument(..., help="Short name the agent will reference, e.g. 'prod_mongo_uri'."),
+    description: str = typer.Option(
+        "", "--description", "-d",
+        help="One-line description shown to the agent so it knows when to use this handle.",
+    ),
+    kind: str = typer.Option(
+        "secret", "--kind", "-k",
+        help="'secret' (opaque to LLM, in keyring) or 'value' (visible in system prompt).",
+    ),
+    scope: str = typer.Option(
+        "project", "--scope", "-s",
+        help="'session' (in-memory), 'project' (.talos/vault/), 'global' (~/.talos/vault/).",
+    ),
+    from_env: Optional[str] = typer.Option(
+        None, "--from-env",
+        help="Read the value from the named env var instead of prompting (avoids shell history).",
+    ),
+    value: Optional[str] = typer.Option(
+        None, "--value",
+        help="Set the value inline. Discouraged for secrets — leaves it in shell history.",
+    ),
+    from_stdin: bool = typer.Option(False, "--from-stdin", help="Read the value from stdin."),
+) -> None:
+    """➕ Add a vault entry.
+
+    By default you'll be prompted (via getpass) for the value — it never
+    appears in argv or shell history. ``--from-env VAR`` and ``--from-stdin``
+    are the scripting-friendly alternatives.
+    """
+    from talos.infra.vault import add_entry
+
+    if kind not in ("secret", "value"):
+        console.print("[red]--kind must be 'secret' or 'value'[/]")
+        raise typer.Exit(1)
+    if scope not in ("session", "project", "global"):
+        console.print("[red]--scope must be 'session', 'project', or 'global'[/]")
+        raise typer.Exit(1)
+    if scope == "session":
+        console.print(
+            "[yellow]heads-up: session scope lives only in this `vault add` "
+            "process; for a session-scope value usable in chat, set it via "
+            "the /vault command inside `talos chat` (lands in M56).[/]"
+        )
+
+    # Resolve the value, in priority order.
+    if value is not None:
+        secret = value
+    elif from_env:
+        secret = os.environ.get(from_env)
+        if not secret:
+            console.print(f"[red]env var {from_env!r} is empty or unset[/]")
+            raise typer.Exit(1)
+    elif from_stdin:
+        import sys as _sys
+        secret = _sys.stdin.read().strip()
+    else:
+        import getpass
+        prompt = f"value for {handle} ({kind}, {scope}): "
+        try:
+            secret = getpass.getpass(prompt) if kind == "secret" \
+                else typer.prompt(prompt, hide_input=False)
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+    if not secret:
+        console.print("[red]empty value — refusing to save[/]")
+        raise typer.Exit(1)
+
+    try:
+        entry = add_entry(handle, secret, kind=kind, description=description, scope=scope)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    console.print(
+        f"[green]🔐 added {_vault_kind_icon(entry.kind)} [bold]{entry.handle}[/]"
+        f"[/]  [dim]{_vault_scope_icon(scope)} {scope} · {entry.kind}"
+        + (f' · {entry.description}' if entry.description else '')
+        + "[/]"
+    )
+
+
+def _import_os_for_cli():
+    """The CLI module already imports asyncio/typer/rich; vault_add wants
+    os. Imported here lazily so adding it doesn't bloat startup for users
+    who never touch the vault."""
+    import os  # noqa: F401
+
+
+# (vault_add uses os.environ — make sure it's imported at module load)
+import os  # noqa: E402
+
+
+@vault_app.command("list")
+def vault_list(
+    scope: Optional[str] = typer.Option(
+        None, "--scope", "-s",
+        help="Filter to one scope. Omit to show all three.",
+    ),
+) -> None:
+    """🔐 List vault entries across scopes (or one scope)."""
+    from talos.infra.vault import list_entries
+
+    if scope and scope not in ("session", "project", "global"):
+        console.print("[red]--scope must be 'session', 'project', or 'global'[/]")
+        raise typer.Exit(1)
+    entries = list_entries(scope)  # type: ignore[arg-type]
+    if not entries:
+        console.print("[dim]no vault entries yet — try: talos vault add <handle> --description '...'[/]")
+        return
+    table = Table(title=f"🔐 vault entries ({len(entries)})")
+    table.add_column("handle", style="cyan", no_wrap=True)
+    table.add_column("kind", justify="center")
+    table.add_column("scope")
+    table.add_column("value / description", style="dim")
+    for e in entries:
+        body = (
+            (e.body or "")[:60] + "…" if e.body and len(e.body) > 60
+            else (e.body or e.description or "")
+        )
+        table.add_row(
+            e.handle,
+            _vault_kind_icon(e.kind) + " " + e.kind,
+            f"{_vault_scope_icon(e.scope)} {e.scope}",
+            body,
+        )
+    console.print(table)
+
+
+@vault_app.command("show")
+def vault_show(handle: str = typer.Argument(..., help="Handle to inspect.")) -> None:
+    """🔎 Show one handle's metadata. For secrets, the value is NOT printed —
+    use ``--reveal`` if you really need to see it."""
+    from talos.infra.vault import resolve
+
+    resolved = resolve(handle)
+    if resolved is None:
+        console.print(f"[red]no vault entry named {handle!r}[/]")
+        raise typer.Exit(1)
+    e = resolved.entry
+    console.print(
+        f"[cyan]{e.handle}[/]  ·  {_vault_kind_icon(e.kind)} {e.kind}  ·  "
+        f"{_vault_scope_icon(resolved.scope)} {resolved.scope}"
+    )
+    if e.description:
+        console.print(f"[dim]{e.description}[/]")
+    console.print(f"[dim]created: {e.created_at}[/]")
+    if e.kind == "value":
+        console.print(f"\n[bold]value:[/] {resolved.value}")
+    else:
+        console.print(
+            "\n[dim]value: \\[hidden — use `talos vault reveal "
+            f"{handle}` to print plaintext to the terminal][/]"
+        )
+
+
+@vault_app.command("reveal")
+def vault_reveal(
+    handle: str = typer.Argument(..., help="Handle whose value to print."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """🚨 Print a secret's plaintext to the terminal. Asks for confirmation
+    first — this is the only path that surfaces a secret outside of tool
+    substitution at exec time. Use sparingly."""
+    from talos.infra.vault import resolve
+
+    resolved = resolve(handle)
+    if resolved is None:
+        console.print(f"[red]no vault entry named {handle!r}[/]")
+        raise typer.Exit(1)
+    if not yes:
+        try:
+            console.print(
+                f"[yellow]print plaintext of {handle!r} ({resolved.scope}) "
+                r"to the terminal? \[y/N] ›[/] ", end="",
+            )
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+    console.print(resolved.value)
+
+
+@vault_app.command("remove")
+def vault_remove(
+    handle: str = typer.Argument(..., help="Handle to remove."),
+    scope: str = typer.Option(
+        "project", "--scope", "-s",
+        help="Scope to remove from (session/project/global). Default: project.",
+    ),
+) -> None:
+    """🗑️  Remove an entry from one scope. Other scopes are untouched."""
+    from talos.infra.vault import remove_entry
+
+    if scope not in ("session", "project", "global"):
+        console.print("[red]--scope must be 'session', 'project', or 'global'[/]")
+        raise typer.Exit(1)
+    if remove_entry(handle, scope=scope):  # type: ignore[arg-type]
+        console.print(f"[green]🗑️  removed [bold]{handle}[/] from {scope}[/]")
+    else:
+        console.print(f"[red]no entry named {handle!r} in scope={scope}[/]")
+        raise typer.Exit(1)
