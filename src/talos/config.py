@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     # claude's --dangerously-skip-permissions). CLI flag overrides this.
     yolo: bool = False
 
+    # ⏱ Time-awareness: when a new user message arrives more than this
+    # many minutes after the last message, inject a brief gap-notice
+    # SystemMessage so the model knows the conversation is being resumed
+    # rather than continued. Set to 0 to disable. The dim "gap noted"
+    # line in the terminal shows the same to you.
+    gap_minutes: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -382,13 +382,21 @@ class Runtime:
             parts.append(text)
         return "  ·  ".join(parts)
 
-    async def _summarize(self, prior: str, transcript: str) -> str:
-        """One metered LLM call that produces the compaction digest."""
+    async def _summarize(self, prior: str, transcript: str,
+                          span: str = "") -> str:
+        """One metered LLM call that produces the compaction digest.
+
+        ``span`` is a human-readable time-range string from
+        ``time_awareness.format_span`` (e.g., "(2026-06-18 09:00 → ...,
+        spanning 2d 4h)"); we drop it into the user message so the digest
+        naturally mentions it. Empty string when no stamped messages exist."""
         from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
 
+        span_line = f"Time span of these turns: {span}\n\n" if span else ""
         msg = await build_llm(self.model_name).ainvoke([
             SM(content=SUMMARY_PROMPT),
             HM(content=(f"Earlier summary:\n{prior}\n\n" if prior else "")
+               + span_line
                + f"New turns to fold in:\n{transcript}"),
         ])
         self._track_usage(msg)
@@ -511,7 +519,25 @@ class Runtime:
             content = build_content(user_input, self.model_name)
         except Exception:
             content = user_input
-        self.messages.append(HumanMessage(content=content))
+
+        # ⏱ Time-awareness: if there's a real gap since the last stamped
+        # message, inject a brief gap-notice SystemMessage so the model
+        # knows the session is being resumed rather than continued.
+        # Also print a dim one-line notice for the user (symmetric awareness).
+        from datetime import datetime as _dt
+        from talos.agent.time_awareness import detect_gap, format_gap, gap_notice, stamp
+
+        now = _dt.now()
+        gap = detect_gap(self.messages, now=now,
+                         threshold_minutes=settings.gap_minutes)
+        if gap is not None:
+            notice = gap_notice(gap, when=now)
+            self.messages.append(notice)
+            console.print(f"[dim]⏱ {format_gap(gap)} gap noted[/]")
+
+        human_msg = HumanMessage(content=content)
+        stamp(human_msg, when=now)
+        self.messages.append(human_msg)
         collected: list[BaseMessage] = []
         # 🎨 streaming state: with markdown on, we re-render the growing
         # buffer through rich.Live (live markdown!); with it off, we print
@@ -609,6 +635,10 @@ class Runtime:
                     close_stream()  # tool lines must not fight the Live region
                     for node, update in (payload or {}).items():
                         for msg in (update or {}).get("messages", []):
+                            # ⏱ stamp every message as it materializes — best
+                            # approximation of "when was this created" we have
+                            from talos.agent.time_awareness import stamp as _stamp
+                            _stamp(msg)
                             collected.append(msg)
                             self._track_usage(msg)
                             self._measure_context(msg)
@@ -1089,6 +1119,12 @@ async def repl(
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
 
     # 🕹️ banner first, before any prompt is drawn.
+    # ⏱ if resuming, compute the gap since the most recent stamped message
+    last_active_str = ""
+    if resume and rt.messages:
+        from talos.agent.time_awareness import format_last_active
+        last_active_str = format_last_active(rt.messages) or ""
+
     print_banner(
         console,
         model=rt.model_name,
@@ -1096,6 +1132,7 @@ async def repl(
         yolo=yolo or settings.yolo,
         resumed=len(rt.messages) if resume else 0,
         title=rt.title,
+        last_active=last_active_str,
     )
 
     # ⚠️ no credentials configured → the model name shown is just the

@@ -71,6 +71,7 @@ def print_banner(
     yolo: bool = False,
     resumed: int = 0,
     title: str = "",
+    last_active: str = "",
 ) -> None:
     console.print()
     if console.is_terminal:
@@ -95,6 +96,8 @@ def print_banner(
         info += " · [bold red]⚡ yolo[/]"
     if resumed:
         info += f" · [dim]💾 {resumed} messages[/]"
+        if last_active:
+            info += f" · [dim]⏱ {last_active}[/]"
     _centered(console, info)
 
     # 📬 surface unread scheduled-task runs (M51) — only when there are
