@@ -424,9 +424,13 @@ PROTECTED_FILES = frozenset({
     "src/talos/lifecycle/self_edit.py",
     "src/talos/lifecycle/self_knowledge.py",
     "src/talos/tools/self_tool.py",
-    # The test suite for self-edit (so a bad edit can't disable its own gate)
+    # 🔐 Vault — substitution + scrubbing must not be silently disabled
+    "src/talos/infra/vault.py",
+    "src/talos/tools/vault_tool.py",
+    # The test suite for self-edit + vault (so a bad edit can't disable its own gate)
     "tests/test_self_edit.py",
     "tests/test_self_knowledge.py",
+    "tests/test_vault.py",
 })
 
 

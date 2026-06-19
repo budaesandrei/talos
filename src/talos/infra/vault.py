@@ -78,8 +78,29 @@ class VaultEntry(BaseModel):
 
 
 def global_dir() -> Path:
-    """``~/.talos/`` — first time vault establishes this as the global config
-    dir. M57 may add XDG / APPDATA cross-platform polish."""
+    """The global config dir, with cross-platform discovery.
+
+    Resolution order:
+
+    1. ``TALOS_HOME`` env var if set (escape hatch for tests + power users)
+    2. ``%APPDATA%/talos`` on Windows
+    3. ``$XDG_CONFIG_HOME/talos`` if XDG_CONFIG_HOME is set (POSIX)
+    4. ``~/.talos`` (the universal default fallback)
+    """
+    import os as _os
+    import sys as _sys
+
+    override = _os.environ.get("TALOS_HOME")
+    if override:
+        return Path(override)
+    if _sys.platform == "win32":
+        appdata = _os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "talos"
+    else:
+        xdg = _os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            return Path(xdg) / "talos"
     return Path.home() / ".talos"
 
 

@@ -394,3 +394,46 @@ def test_shell_output_is_scrubbed():
     scrubbed = vault.RevealedSecrets.scrub(leaked_output)
     assert "abc12345leaky" not in scrubbed
     assert "[REDACTED:leak_me]" in scrubbed
+
+
+# ── 🌐 cross-platform global_dir (M57) ────────────────────────────────
+
+
+def test_global_dir_respects_talos_home_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("TALOS_HOME", str(tmp_path / "custom-home"))
+    assert vault.global_dir() == tmp_path / "custom-home"
+
+
+def test_global_dir_uses_xdg_config_home_on_posix(monkeypatch, tmp_path):
+    """When XDG_CONFIG_HOME is set on POSIX and TALOS_HOME isn't, use it."""
+    import sys as _sys
+    if _sys.platform == "win32":
+        pytest.skip("XDG path not used on Windows")
+    monkeypatch.delenv("TALOS_HOME", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert vault.global_dir() == tmp_path / "xdg" / "talos"
+
+
+def test_global_dir_falls_back_to_home(monkeypatch, tmp_path):
+    """With nothing set, the universal default is ~/.talos."""
+    monkeypatch.delenv("TALOS_HOME", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert vault.global_dir() == tmp_path / "home" / ".talos"
+
+
+# ── 🛡️ meta-protection (M57) ──────────────────────────────────────────
+
+
+def test_vault_files_in_protected_files():
+    """The vault implementation files must be on the self-edit allowlist
+    so a self-edit can't silently disable scrubbing or substitution."""
+    from talos.lifecycle.self_edit import PROTECTED_FILES
+    must_protect = {
+        "src/talos/infra/vault.py",
+        "src/talos/tools/vault_tool.py",
+        "tests/test_vault.py",
+    }
+    missing = must_protect - PROTECTED_FILES
+    assert not missing, f"vault files missing from PROTECTED_FILES: {missing}"

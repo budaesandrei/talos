@@ -25,6 +25,7 @@ Every feature category a modern agent has, implemented minimally:
 | 🔄 /evolve lifecycle | `lifecycle/evolve.py` | [15 — evolve](docs/15-evolve.md) |
 | 📅 Scheduled tasks | `lifecycle/scheduling.py` | [16 — scheduled tasks](docs/16-scheduled-tasks.md) |
 | 🪞 Self-knowledge + self-edit | `lifecycle/self_knowledge.py`, `lifecycle/self_edit.py` | [17 — self](docs/17-self.md) |
+| 🔐 Vault (secrets + scoped values) | `infra/vault.py` | [18 — vault](docs/18-vault.md) |
 | 🔗 Cross-agent linking · 👥 teams · 👁 vision · 🚧 policy · 🔭 tracing | various | see docs |
 
 ## 🚀 Quickstart
@@ -112,6 +113,7 @@ git checkout <hash>      # time-travel to any milestone and poke around
 | M39–M44 | cross-agent linking, skill synthesis, parallel teams, vision, /init, /evolve ouroboros |
 | M49–M51 | scheduled tasks: cron daemon, NL→cron with human gate, in-chat surfacing |
 | M52–M54 | self-knowledge manifest, worktree-sandboxed self-edit, verifier + protected-files apply |
+| M55–M57 | vault for secrets/scoped values, three scopes (session/project/global), substitution + scrubbing |
 
 Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
 
