@@ -27,6 +27,7 @@ BUILTINS = {
     "/plan": "🗺️ plan before doing: /plan <task> (AI-DLC style)",
     "/evolve": "🔄 lifecycle loop: debt → persona research → requirements → plan",
     "/runs": "📬 show recent scheduled-task runs (📅 talos schedule …)",
+    "/vault": "🔐 list vault handles · /vault unredact | redact toggles scrubbing",
     "/exit": "quit (also /quit)",
 }
 

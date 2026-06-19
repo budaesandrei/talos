@@ -1386,6 +1386,54 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
             console.print(f"[dim]🧜 opened {path}[/]")
         else:
             console.print("[dim]no mermaid blocks in the last reply[/]")
+    elif name == "/vault":
+        # 🔐 In-chat vault view + redaction toggle. List handles like
+        # `talos vault list`, plus subcommands for the session-scoped
+        # scrubber:  /vault unredact   /vault redact
+        from talos.infra.vault import RevealedSecrets, all_handles
+
+        # The slash command parser stashes everything after the name in
+        # `payload` only for /plan and /evolve; for builtins we get just
+        # the name, so subcommands aren't reachable from `_run_builtin`.
+        # The dispatcher routes "/vault unredact" → action="unknown",
+        # so we expose toggles by listening for an `args` attribute we
+        # tack on via dispatch upgrade in a follow-up; for now, /vault
+        # lists handles and prints the current scrub state — the toggle
+        # lives in `talos vault` (CLI) and an in-REPL form is M57 polish.
+        handles = all_handles()
+        if not handles:
+            console.print(
+                "[dim]🔐 no vault entries yet — try: "
+                "talos vault add <handle> --description '...'[/]"
+            )
+            return
+        table = Table(title=f"🔐 vault handles ({len(handles)})",
+                      show_header=True, header_style="dim")
+        table.add_column("handle", style="cyan")
+        table.add_column("kind", justify="center")
+        table.add_column("scope")
+        table.add_column("description / value", style="dim")
+        icons_k = {"secret": "🔒", "value": "📝"}
+        icons_s = {"session": "🟡", "project": "🔵", "global": "🟢"}
+        for h in handles:
+            if h.kind == "secret":
+                body = h.description or "(no description)"
+            else:
+                body = (h.body or "")[:80]
+                if h.description:
+                    body += f"  ({h.description})"
+            table.add_row(
+                h.handle,
+                f"{icons_k.get(h.kind, '·')} {h.kind}",
+                f"{icons_s.get(h.scope, '·')} {h.scope}",
+                body,
+            )
+        console.print(table)
+        state = "ON" if RevealedSecrets.is_enabled() else "OFF"
+        n = RevealedSecrets.revealed_count()
+        console.print(
+            f"[dim]🔐 scrubber: {state}  ·  {n} secret value(s) revealed this session[/]"
+        )
     elif name == "/runs":
         # 📬 List recent scheduled-task runs and mark them read. The
         # daemon writes runs to .talos/schedules/<id>/runs/; this is the

@@ -360,3 +360,142 @@ def all_handles() -> list[VaultEntry]:
             seen.add(entry.handle)
             out.append(entry)
     return out
+
+
+# ── 🔁 substitution + scrubbing (M56) ─────────────────────────────────
+
+
+import re as _re
+
+
+class RevealedSecrets:
+    """Process-scoped registry of secret values that have been read in this
+    session. The scrubber consults this to redact accidental leaks in
+    tool output.
+
+    Lives only in memory; never written to disk. Cleared when the process
+    exits or when ``reset()`` is called from tests."""
+
+    _values: dict[str, str] = {}  # handle -> plaintext
+    _enabled: bool = True
+
+    @classmethod
+    def remember(cls, handle: str, value: str) -> None:
+        """Called by ``substitute()`` whenever a secret placeholder resolves.
+        Empty values aren't registered (would match everything)."""
+        if value and len(value) >= 4:  # don't redact 1-3 char "secrets" (false positives)
+            cls._values[handle] = value
+
+    @classmethod
+    def set_enabled(cls, enabled: bool) -> None:
+        cls._enabled = enabled
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        return cls._enabled
+
+    @classmethod
+    def scrub(cls, text: str) -> str:
+        """Replace any known secret value in ``text`` with ``[REDACTED:handle]``.
+
+        Sorted by length descending so longer matches replace first —
+        prevents partial-overlap weirdness when one secret is a substring
+        of another. Honest-leak defense only: a model could trivially
+        base64-encode the value to bypass this. The docs say so plainly.
+        """
+        if not cls._enabled or not text or not cls._values:
+            return text
+        out = text
+        for handle, value in sorted(cls._values.items(), key=lambda kv: -len(kv[1])):
+            if value and value in out:
+                out = out.replace(value, f"[REDACTED:{handle}]")
+        return out
+
+    @classmethod
+    def reset(cls) -> None:
+        """Test helper — fully clear state."""
+        cls._values.clear()
+        cls._enabled = True
+
+    @classmethod
+    def revealed_count(cls) -> int:
+        return len(cls._values)
+
+
+_PLACEHOLDER_RE = _re.compile(r"\{\{(secret|value):([a-zA-Z0-9_.\-]+)\}\}")
+
+
+def substitute(text: str) -> tuple[str, list[str]]:
+    """Replace ``{{secret:name}}`` / ``{{value:name}}`` placeholders in
+    ``text`` with the corresponding vault values.
+
+    Returns ``(substituted_text, missing_placeholders)``. Missing handles
+    are left as-is in the text (so the failure is visible in the
+    executed command rather than silently becoming an empty string).
+
+    Side effect: every successfully-resolved SECRET is registered with
+    ``RevealedSecrets`` so the scrubber can redact it from future tool
+    output. VALUE substitutions are not registered (not sensitive)."""
+    missing: list[str] = []
+
+    def _sub(m: "_re.Match[str]") -> str:
+        kind = m.group(1)
+        handle = m.group(2)
+        resolved = resolve(handle)
+        if resolved is None:
+            missing.append(f"{kind}:{handle}")
+            return m.group(0)
+        if resolved.entry.kind != kind:
+            # Asked for SECRET but it's a VALUE (or vice versa) — leave it
+            # so the command fails visibly with the placeholder still in it.
+            missing.append(f"{kind}:{handle} (is {resolved.entry.kind})")
+            return m.group(0)
+        if kind == "secret":
+            RevealedSecrets.remember(handle, resolved.value)
+        return resolved.value
+
+    return _PLACEHOLDER_RE.sub(_sub, text), missing
+
+
+# ── 🪞 system-prompt projection ───────────────────────────────────────
+
+
+def vault_summary(max_chars: int = 4000) -> str:
+    """The compact handle index for the system prompt — similar to
+    ``skills_summary``. Lists every handle (deduped by scope shadowing).
+
+    For SECRET handles, shows the description only — the value never
+    leaves the keyring. For VALUE handles, inlines the value so the
+    model can reference it directly without a tool call. Soft size
+    budget enforced; truncates long lists with a `(N more)` tail.
+    """
+    handles = all_handles()
+    if not handles:
+        return ""
+    lines = [
+        "## Vault (handles you can use)",
+        "_For SECRETs, write `{{secret:<handle>}}` inside a shell command "
+        "or code block — the shell tool substitutes the plaintext at exec "
+        "time, so the value never enters your context. For VALUEs, you can "
+        "reference the value below directly. `vault_get(handle)` is also "
+        "available for VALUE reads._",
+        "",
+    ]
+    budget = max_chars - sum(len(l) + 1 for l in lines)
+    for h in handles:
+        if h.kind == "secret":
+            line = (f"- 🔒 SECRET `{h.handle}` "
+                    f"({h.scope}) — {h.description or '(no description)'}")
+        else:
+            preview = (h.body or "")
+            if len(preview) > 100:
+                preview = preview[:97] + "…"
+            tail = f"  ({h.description})" if h.description else ""
+            line = f"- 📝 VALUE `{h.handle}` ({h.scope}) = `{preview}`{tail}"
+        if budget - len(line) - 1 < 100:
+            remaining = len(handles) - handles.index(h)
+            lines.append(f"  (… {remaining} more handle(s) elided)")
+            break
+        lines.append(line)
+        budget -= len(line) + 1
+    return "\n".join(lines).rstrip() + "\n"

@@ -79,6 +79,18 @@ def build_system_prompt() -> str:
     except Exception:
         pass
 
+    # 🔐 vault: list available handles by name + description so the model
+    # knows when to use {{secret:name}} substitution in shell commands.
+    # SECRET values never enter the prompt; VALUE handles are inlined.
+    try:
+        from talos.infra.vault import vault_summary
+
+        vsum = vault_summary()
+        if vsum:
+            parts.append(vsum)
+    except Exception:
+        pass
+
     if settings.workspace_snapshot:
         try:
             from talos.agent.workspace import snapshot

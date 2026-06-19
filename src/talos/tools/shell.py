@@ -19,8 +19,18 @@ MAX_OUTPUT_CHARS = 8_000
 def shell(command: str) -> str:
     """Run a shell command and return its output (stdout + stderr, exit code).
     The executing shell and its syntax rules are listed in your Environment
-    section — use that syntax."""
+    section — use that syntax.
+
+    🔐 Vault substitution: if the command contains placeholders like
+    ``{{secret:<handle>}}`` or ``{{value:<handle>}}``, the shell tool
+    resolves them from the vault before exec — the actual plaintext
+    never enters your message history. Missing handles are left as-is
+    so the failure is visible in the command output.
+    """
     import os
+    from talos.infra.vault import substitute
+
+    command, missing = substitute(command)
 
     cmd = shell_command(command)
     # 📦 optionally wrap for sandboxed execution (identity when off)
@@ -41,4 +51,8 @@ def shell(command: str) -> str:
     out = (proc.stdout or "") + (proc.stderr or "")
     if len(out) > MAX_OUTPUT_CHARS:
         out = out[:MAX_OUTPUT_CHARS] + f"\n… [truncated, {len(out) - MAX_OUTPUT_CHARS} more chars]"
-    return f"exit code: {proc.returncode} (shell: {detect_shell()})\n{out}".strip()
+    prefix = ""
+    if missing:
+        prefix = (f"⚠️ unresolved vault placeholders: {', '.join(missing)} — "
+                  "left as-is in the command\n")
+    return (prefix + f"exit code: {proc.returncode} (shell: {detect_shell()})\n{out}").strip()

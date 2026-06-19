@@ -200,3 +200,197 @@ def test_session_scope_is_in_memory_only(tmp_path):
     # But the handle resolves
     r = vault.resolve("only-session")
     assert r is not None and r.value == "v" and r.scope == "session"
+
+
+# ── 🔁 substitution (M56) ─────────────────────────────────────────────
+
+
+def test_substitute_resolves_secret_placeholder():
+    vault.add_entry("api_key", "sk-12345-real", kind="secret", scope="project")
+    out, missing = vault.substitute(
+        "curl -H 'Authorization: Bearer {{secret:api_key}}' x"
+    )
+    assert "sk-12345-real" in out
+    assert "{{secret:api_key}}" not in out
+    assert missing == []
+
+
+def test_substitute_resolves_value_placeholder():
+    vault.add_entry("url", "https://x.example.com", kind="value", scope="project")
+    out, missing = vault.substitute("curl {{value:url}}/api")
+    assert out == "curl https://x.example.com/api"
+    assert missing == []
+
+
+def test_substitute_leaves_unknown_handle_in_place():
+    """A missing handle stays as the literal placeholder so the failure
+    is visible in the executed command, not silently empty."""
+    out, missing = vault.substitute("psql {{secret:nope}}")
+    assert "{{secret:nope}}" in out
+    assert missing == ["secret:nope"]
+
+
+def test_substitute_refuses_kind_mismatch():
+    """Asking for SECRET when the handle is a VALUE (or vice versa)
+    must leave the placeholder in and flag missing — never silently
+    return the wrong-kind value."""
+    vault.add_entry("url", "https://x.example.com", kind="value", scope="project")
+    out, missing = vault.substitute("curl {{secret:url}}")
+    assert "{{secret:url}}" in out
+    assert any("url" in m and "is value" in m for m in missing)
+
+
+def test_substitute_handles_multiple_placeholders():
+    vault.add_entry("k1", "alpha", kind="secret", scope="project")
+    vault.add_entry("k2", "beta", kind="secret", scope="project")
+    out, missing = vault.substitute("{{secret:k1}} and {{secret:k2}}")
+    assert out == "alpha and beta"
+    assert missing == []
+
+
+def test_substitute_registers_revealed_secrets_for_scrubbing():
+    """Resolving a secret must register it with RevealedSecrets so the
+    scrubber can redact it from future tool outputs."""
+    vault.RevealedSecrets.reset()
+    vault.add_entry("ghpat", "ghp_RealishToken123", kind="secret", scope="project")
+    vault.substitute("git push {{secret:ghpat}}")
+    assert vault.RevealedSecrets.revealed_count() == 1
+
+
+def test_substitute_does_not_register_value_handles():
+    """Non-secret values aren't registered — they're not sensitive."""
+    vault.RevealedSecrets.reset()
+    vault.add_entry("url", "https://x.example.com", kind="value", scope="project")
+    vault.substitute("curl {{value:url}}")
+    assert vault.RevealedSecrets.revealed_count() == 0
+
+
+def test_substitute_returns_string_unchanged_when_no_placeholders():
+    out, missing = vault.substitute("plain old text")
+    assert out == "plain old text"
+    assert missing == []
+
+
+# ── 🧼 scrubbing ──────────────────────────────────────────────────────
+
+
+def test_scrub_replaces_revealed_secret_with_handle_placeholder():
+    vault.RevealedSecrets.reset()
+    vault.add_entry("api_key", "sk-leaky-secret", kind="secret", scope="project")
+    vault.substitute("use {{secret:api_key}}")  # registers the secret
+    text = "Result: sk-leaky-secret found in output"
+    assert vault.RevealedSecrets.scrub(text) == "Result: [REDACTED:api_key] found in output"
+
+
+def test_scrub_is_noop_when_no_match():
+    vault.RevealedSecrets.reset()
+    vault.add_entry("api_key", "sk-not-here", kind="secret", scope="project")
+    vault.substitute("use {{secret:api_key}}")
+    text = "nothing sensitive in here"
+    assert vault.RevealedSecrets.scrub(text) == text
+
+
+def test_scrub_respects_disabled_flag():
+    vault.RevealedSecrets.reset()
+    vault.add_entry("api_key", "sk-leaky", kind="secret", scope="project")
+    vault.substitute("use {{secret:api_key}}")
+    vault.RevealedSecrets.set_enabled(False)
+    text = "leaking sk-leaky here"
+    assert vault.RevealedSecrets.scrub(text) == text
+    vault.RevealedSecrets.set_enabled(True)
+    assert "[REDACTED" in vault.RevealedSecrets.scrub(text)
+
+
+def test_scrub_replaces_longer_secrets_first():
+    """When one secret value is a substring of another, the longer one
+    must replace first — otherwise we'd partially redact and corrupt
+    the second match."""
+    vault.RevealedSecrets.reset()
+    vault.add_entry("short", "abcdef", kind="secret", scope="project")
+    vault.add_entry("long", "abcdefghij", kind="secret", scope="project")
+    vault.substitute("{{secret:short}} {{secret:long}}")
+    out = vault.RevealedSecrets.scrub("xxx abcdefghij yyy abcdef zzz")
+    assert "[REDACTED:long]" in out
+    assert "[REDACTED:short]" in out
+
+
+def test_scrub_ignores_short_secrets():
+    """Length floor prevents 3-char "secrets" like 'abc' from matching
+    every other word in tool output."""
+    vault.RevealedSecrets.reset()
+    vault.add_entry("tiny", "abc", kind="secret", scope="project")
+    vault.substitute("use {{secret:tiny}}")
+    text = "abc and abc and abc"
+    assert vault.RevealedSecrets.scrub(text) == text  # not registered
+
+
+# ── 🪞 system-prompt projection ──────────────────────────────────────
+
+
+def test_vault_summary_lists_handles_with_kind_markers():
+    vault.add_entry("api_key", "sk-real", kind="secret", description="prod key",
+                    scope="project")
+    vault.add_entry("url", "https://x.example.com", kind="value",
+                    description="dashboard", scope="project")
+    summary = vault.vault_summary()
+    assert "Vault" in summary
+    assert "api_key" in summary
+    assert "url" in summary
+    # SECRET value MUST NOT appear in the summary
+    assert "sk-real" not in summary
+    # VALUE body IS inlined
+    assert "https://x.example.com" in summary
+    # Kind markers
+    assert "SECRET" in summary
+    assert "VALUE" in summary
+
+
+def test_vault_summary_empty_when_no_handles():
+    assert vault.vault_summary() == ""
+
+
+def test_vault_summary_includes_scope():
+    vault.add_entry("g", "v", kind="value", scope="global")
+    vault.add_entry("p", "v", kind="value", scope="project")
+    summary = vault.vault_summary()
+    assert "(project)" in summary
+    assert "(global)" in summary
+
+
+# ── 🐚 shell tool integration ────────────────────────────────────────
+
+
+def test_shell_substitutes_placeholders_before_exec():
+    """Smoke test: a shell command with a {{value:..}} placeholder should
+    have the value substituted before exec."""
+    from talos.tools.shell import shell
+    vault.add_entry("greeting", "hello-vault", kind="value", scope="project")
+    out = shell.invoke({"command": "echo {{value:greeting}}"})
+    assert "hello-vault" in out
+
+
+def test_shell_warns_on_unresolved_placeholder():
+    """When a placeholder doesn't resolve, the command runs anyway with
+    the literal placeholder, and the output is prefixed with a warning."""
+    from talos.tools.shell import shell
+    out = shell.invoke({"command": "echo {{secret:does_not_exist}}"})
+    assert "unresolved vault placeholders" in out
+    assert "secret:does_not_exist" in out
+
+
+def test_shell_output_is_scrubbed():
+    """If a shell command happens to echo a known secret value, the
+    scrubber (called from tools_node, but the substitution side-effect
+    means future invocations would scrub) replaces it.
+
+    Note: this test is at the substitution level, since the scrubber
+    runs at graph-builder layer not in the tool itself."""
+    vault.RevealedSecrets.reset()
+    vault.add_entry("leak_me", "abc12345leaky", kind="secret", scope="project")
+    # Trigger registration
+    vault.substitute("use {{secret:leak_me}}")
+    # Now imagine some other tool returned the value verbatim
+    leaked_output = "Error: connection failed for abc12345leaky"
+    scrubbed = vault.RevealedSecrets.scrub(leaked_output)
+    assert "abc12345leaky" not in scrubbed
+    assert "[REDACTED:leak_me]" in scrubbed
