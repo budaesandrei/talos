@@ -1216,6 +1216,43 @@ async def repl(
         if action == "evolve":
             await run_evolve(rt, pump, payload)
             return True
+        if action in ("shell", "shell-silent"):
+            from talos.tools.shell_escape import run_shell_escape
+
+            silent = action == "shell-silent"
+            console.print(
+                f"[dim #c97f2e]🐚 $ {payload}"
+                + ("  [silent][/]" if silent else "[/]")
+            )
+            try:
+                result = await asyncio.to_thread(
+                    run_shell_escape, payload, silent=silent,
+                )
+            except Exception as exc:  # noqa: BLE001 — show the user, never crash REPL
+                console.print(f"[red]💥 {type(exc).__name__}: {exc}[/]")
+                return True
+            if result.missing_handles:
+                console.print(
+                    f"[yellow]⚠️ unresolved vault placeholders: "
+                    f"{', '.join(result.missing_handles)} — left as-is[/]"
+                )
+            if result.output:
+                console.print(result.output, highlight=False, markup=False, end="")
+                if not result.output.endswith("\n"):
+                    console.print()
+            tag = "✅" if result.exit_code == 0 else f"❌ exit {result.exit_code}"
+            mode = "silent" if silent else "shared with agent"
+            console.print(f"[dim]{tag}  ·  {mode}[/]")
+            if not silent and result.history_message is not None:
+                rt.messages.append(result.history_message)
+                # Persist immediately so an interjection or crash doesn't
+                # lose the shell context the agent just gained.
+                try:
+                    from talos.memory.sessions import save_session
+                    save_session(rt.session_id, rt.messages)
+                except Exception:
+                    pass
+            return True
         if action == "prompt":
             console.print("[dim]⌨️  expanded custom command[/]")
         await run_turn(payload)

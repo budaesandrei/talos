@@ -48,6 +48,10 @@ def expand_custom(path: Path, arguments: str) -> str:
 
 def help_text() -> str:
     lines = [f"  {name:<10} {desc}" for name, desc in BUILTINS.items()]
+    lines.append("")
+    lines.append("🐚 shell escape (no LLM):")
+    lines.append("  !cmd       run directly; agent sees the output")
+    lines.append("  !!cmd      run directly; output NOT shared with the agent")
     customs = custom_commands()
     if customs:
         lines.append("")
@@ -60,11 +64,24 @@ def dispatch(line: str) -> tuple[str, str]:
     """Classify a user line.
 
     Returns (action, payload):
-      ("chat", line)     → send to the model
-      ("prompt", text)   → custom command expanded into a prompt
-      ("builtin", name)  → caller handles it
-      ("unknown", name)  → unknown slash command
+      ("chat", line)            → send to the model
+      ("prompt", text)          → custom command expanded into a prompt
+      ("builtin", name)         → caller handles it
+      ("unknown", name)         → unknown slash command
+      ("shell", cmd)            → !cmd: run directly, share output with model
+      ("shell-silent", cmd)     → !!cmd: run directly, do NOT share with model
     """
+    # 🐚 Shell escape — !cmd runs without involving the LLM. !! is silent
+    # (output goes to your terminal only); ! is shared (the command + output
+    # are appended to the conversation so the agent sees what you saw).
+    # Note: !! must be checked BEFORE ! because of the prefix overlap.
+    if line.startswith("!!"):
+        cmd = line[2:].lstrip()
+        return ("shell-silent" if cmd else "unknown"), (cmd or "!!")
+    if line.startswith("!"):
+        cmd = line[1:].lstrip()
+        return ("shell" if cmd else "unknown"), (cmd or "!")
+
     if not line.startswith("/"):
         return "chat", line
 
