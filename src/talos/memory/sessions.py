@@ -106,6 +106,18 @@ def save_session(session_id: str, messages: list[BaseMessage]) -> None:
     (d / f"{session_id}.json").write_text(
         json.dumps(messages_to_dict(messages), indent=1), encoding="utf-8"
     )
+    # 🗂 Auto-ingest into the sessions KB so semantic search stays fresh.
+    # Failures are swallowed — index out-of-sync is annoying, but a save
+    # failure for the chat itself would be a real problem. Setting
+    # TALOS_SESSIONS_AUTOINDEX=false disables the hook (useful for tests
+    # or low-resource setups where the embedder is expensive to load).
+    import os as _os
+    if _os.environ.get("TALOS_SESSIONS_AUTOINDEX", "true").lower() != "false":
+        try:
+            from talos.memory.sessions_kb import ingest_session
+            ingest_session(session_id)
+        except Exception:
+            pass
 
 
 def load_session(session_id: str) -> list[BaseMessage]:

@@ -282,6 +282,68 @@ class _Status:
             self._status = None
 
 
+def _resolve_resume(resume: str) -> str:
+    """Turn a `-r <arg>` into a concrete session id.
+
+    Resolution order:
+      1. "latest" → most recent session in the global dir
+      2. Exact id match → use as-is
+      3. Otherwise → semantic search over the sessions KB; if the top hit
+         scores well enough, auto-resume; else show candidates and raise
+
+    Raises ``FileNotFoundError`` when nothing works.
+    """
+    from pathlib import Path
+    from talos.memory.sessions import latest_session_id, sessions_dir
+
+    if resume == "latest":
+        sid = latest_session_id()
+        if sid is None:
+            raise FileNotFoundError("no sessions to resume")
+        return sid
+
+    # 2) Exact id?
+    if (sessions_dir() / f"{resume}.json").is_file():
+        return resume
+
+    # 3) Natural-language fuzzy resume (M61). Best-effort; if anything in
+    # the KB layer is missing or the embedder fails to load, give a clear
+    # error pointing at the literal id alternative.
+    try:
+        from talos.memory import sessions as _sm
+        from talos.memory import sessions_kb as _kb
+        kb = _kb.open_sessions_kb()
+        if kb.count() == 0:
+            raise FileNotFoundError(
+                f"no session named {resume!r} and the search index is empty. "
+                "Try `talos sessions reindex` first, or `talos sessions` to list IDs."
+            )
+        hits = _kb.search_sessions(query=resume, k=5, kb=kb)
+        rolled = _kb.aggregate_to_sessions(hits)
+        if not rolled:
+            raise FileNotFoundError(f"no session matched {resume!r}")
+        best = rolled[0]
+        # Print the candidates so the user sees what was matched
+        from rich.console import Console as _C
+        _console = _C()
+        _console.print(f"[dim]🔍 fuzzy resume — matched {len(rolled)} candidate(s) for {resume!r}:[/]")
+        for i, r in enumerate(rolled[:3], 1):
+            meta = _sm.get_session_meta(r["session_id"]) or {}
+            title = meta.get("title") or "[dim]…[/]"
+            marker = "[green]→[/]" if i == 1 else " "
+            _console.print(
+                f"  {marker} [cyan]{r['session_id']}[/] · {title} "
+                f"[dim](score {r['score']:.2f})[/]"
+            )
+        return best["session_id"]
+    except FileNotFoundError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise FileNotFoundError(
+            f"no session named {resume!r} (fuzzy resume failed: {exc})"
+        )
+
+
 class Runtime:
     """One conversation: a compiled graph + the message history."""
 
@@ -307,10 +369,11 @@ class Runtime:
         )
         self._rebuild_graph()
         # 💾 Either continue an old session or start a new one.
+        # `resume` is one of: "latest", an exact session id, or a natural-
+        # language query (M61). The fuzzy path runs a vector search and
+        # auto-resumes the best match.
         if resume:
-            session_id = latest_session_id() if resume == "latest" else resume
-            if session_id is None:
-                raise FileNotFoundError("no sessions to resume")
+            session_id = _resolve_resume(resume)
             self.session_id = session_id
             self.messages: list[BaseMessage] = load_session(session_id)
         else:

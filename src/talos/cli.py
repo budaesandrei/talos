@@ -129,6 +129,68 @@ def sessions_default(
     console.print("[dim]resume with: talos chat -r <id>   (or -r latest)[/]")
 
 
+@sessions_app.command("search")
+def sessions_search(
+    query: str = typer.Argument(..., help="What to look for, in natural language."),
+    k: int = typer.Option(5, "--k", "-k", help="Max number of sessions to show."),
+    all_projects: bool = typer.Option(False, "--all", "-a", help="Search across every project (default: current only)."),
+) -> None:
+    """🔍 Semantic search across saved conversations.
+
+    Returns the top-k sessions ranked by relevance to the query. Resume
+    any with: talos chat -r <id>. Or just pass natural language directly
+    to `talos chat -r` and it will do the search + confirm the match."""
+    from talos.memory import sessions, sessions_kb
+
+    project_path = None if all_projects else sessions.current_project_path()
+    kb = sessions_kb.open_sessions_kb()
+    if kb.count() == 0:
+        console.print("[yellow]🔍 the sessions index is empty[/]")
+        console.print("[dim]run `talos sessions reindex` to ingest your chat history[/]")
+        raise typer.Exit(1)
+    hits = sessions_kb.search_sessions(query, k=k, kb=kb, project_path=project_path)
+    if not hits:
+        console.print("[dim]no matching sessions[/]")
+        return
+    rolled = sessions_kb.aggregate_to_sessions(hits)
+    table = Table(title=f"🔍 Search results for {query!r}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("id", style="cyan")
+    table.add_column("title")
+    table.add_column("score", justify="right", style="dim")
+    table.add_column("snippet", style="dim")
+    for i, r in enumerate(rolled, 1):
+        meta = sessions.get_session_meta(r["session_id"]) or {}
+        title = meta.get("title") or "[dim]…[/]"
+        snip = r["snippet"] if len(r["snippet"]) < 60 else r["snippet"][:57] + "…"
+        table.add_row(str(i), r["session_id"], title, f"{r['score']:.2f}", snip)
+    console.print(table)
+    console.print("[dim]resume with: talos chat -r <id>   (or pass NL to -r for auto-resume)[/]")
+
+
+@sessions_app.command("reindex")
+def sessions_reindex(
+    all_projects: bool = typer.Option(True, "--all/--here", help="Reindex everything (default) vs only this project's sessions."),
+) -> None:
+    """♻️  Re-ingest sessions into the search index. Run after you've
+    accumulated sessions but never indexed (e.g. first time using
+    `talos sessions search`), or after the embedder changes.
+
+    Note: new sessions are auto-indexed when saved — you only need
+    reindex for catch-up or after deleting/restoring sessions."""
+    from talos.memory import sessions_kb
+
+    console.print("[dim]♻️  reindexing sessions — first run downloads the embedding model[/]")
+    kb = sessions_kb.open_sessions_kb()
+    # Wipe and re-ingest everything for simplicity
+    kb.clear()
+    res = sessions_kb.ingest_all(kb=kb)
+    console.print(
+        f"[green]♻️  indexed {res['sessions']} session(s), "
+        f"{res['chunks']} chunk(s) — into {kb.dir}[/]"
+    )
+
+
 @sessions_app.command("migrate")
 def sessions_migrate() -> None:
     """➡️  Copy any legacy `.talos/sessions/` (cwd-local) into the global
