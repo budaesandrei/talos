@@ -32,7 +32,7 @@ The same pattern as `CLAUDE.md` / `AGENTS.md` / `.cursorrules`: **stable instruc
 
 ## 💾 Sessions
 
-Every chat auto-saves its message list to `.talos/sessions/<id>.json` (LangChain's message serializers — `ToolMessage`s and all).
+Every chat auto-saves its message list to `~/.talos/sessions/<id>.json` (LangChain's message serializers — `ToolMessage`s and all). Pre-M60, this lived at `./.talos/sessions/` cwd-local; see [21 — sessions](21-sessions-and-search.md) for the migration story.
 
 ```bash
 talos sessions          # list

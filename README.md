@@ -122,28 +122,38 @@ git checkout <hash>      # time-travel to any milestone and poke around
 | M59 | shell escape: !cmd shares with the agent, !!cmd silent — no LLM, no gate, no sandbox |
 | M60–M62 | sessions go global; vector KB primitive; search CLI + fuzzy resume + reprint on resume |
 | M63–M65 | /knowledge for files+URLs (kiro parity); trafilatura HTML; scheduled re-indexing pairs KB + cron |
+| M66 | full agent-tool backfill — 33 tools so the agent drives every non-safety CLI verb in natural language |
 
 Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
+
+**Also see:** [CHANGELOG](CHANGELOG.md) for what shipped in each milestone, [CONTRIBUTING](CONTRIBUTING.md) for project conventions + the CLA note, [LICENSE](LICENSE) for the Apache 2.0 terms.
 
 ## 📁 Layout
 
 ```
 src/talos/
-  cli.py          🖥️ typer commands
-  config.py       ⚙️ settings (.env, TALOS_* env vars)
-  agent/llm.py          🔌 ChatOpenAI factory
-  agent/context.py      🧠 system-prompt assembly (rules+memory+skills+agents)
-  infra/permissions.py  🛡️ the gate
-  memory.py  memory/sessions.py  lifecycle/skills.py  ui/commands.py  agents.py  integrations/mcp.py
-  agent/graph/          🕸️ state + builder (the loop itself)
-  runtime/        🏃 streaming runner + TUI
-  tools/          🔧 files · shell · web · memory · skill · task
-tests/            🎭 offline tests with a scripted fake LLM
-.talos/           project-local agent config (agents, commands, skills…)
+  cli.py · __main__.py · config.py   🖥️ entrypoint + settings
+  agent/         🧠 graph/ (the think→act loop), runtime.py (REPL driver),
+                    llm.py, context.py, thinking.py, time_awareness.py
+  ui/            🖥️ tui.py · tui_app.py · banner · mermaid · commands
+  memory/        🧠 sessions · notes · compaction · graph_memory ·
+                    checkpoints · knowledge · sessions_kb · embeddings
+  lifecycle/     🔄 planning · evolve · skills · skill_synthesis ·
+                    scheduling · self_knowledge · self_edit · knowledge_cli
+  integrations/  🔌 mcp · models · linking · agents · vision
+  infra/         🛡️ permissions · policy · sandbox · tracing ·
+                    environment · vault
+  tools/         🔧 files · shell · shell_escape · web · memory · skill ·
+                    recall · task · team · read_self · vault_get ·
+                    sessions_tool · knowledge_tool · meta_tools
+  prompts/       📝 system.md (persona)
+tests/           🎭 offline tests with a scripted fake LLM
+.talos/          project-local config (agents, commands, skills, mcp.json…)
+~/.talos/        global config (sessions, vault, knowledge bases, self-edits)
 ```
 
 ## 🧪 Tests
 
 ```bash
-python -m pytest tests/ -q     # 27 tests, all offline — no API key needed
+python -m pytest tests/ -q     # 376 tests, all offline — no API key needed
 ```
