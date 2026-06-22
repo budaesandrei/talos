@@ -67,16 +67,22 @@ def runs_dir(schedule_id: str) -> Path:
 class Schedule(BaseModel):
     """One scheduled task. Pydantic v2 — validated on construction so a
     malformed schedule.json fails loudly at load instead of at fire time.
+
+    M65: ``action_kind`` extends the schedule beyond just "run a prompt".
+    ``prompt`` (default) → runs ``Runtime.turn(prompt)`` as before.
+    ``kb_update`` → re-ingests the KB named in ``kb_id`` (no LLM call).
     """
 
     id: str
-    prompt: str
+    prompt: str = ""  # the prompt for action_kind='prompt'; ignored otherwise
     cron: str
     tz: str | None = None  # IANA zone name, e.g. "America/New_York" (M50+)
     model: str | None = None
     yolo: bool = False
     resume: bool = False  # 🎟️ rolling session per schedule (lands in M50)
     session_id: str | None = None  # filled when resume=True; first fire stamps it
+    action_kind: str = "prompt"  # "prompt" | "kb_update"
+    kb_id: str | None = None  # for action_kind='kb_update' — name or id
     created_at: str = Field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -433,16 +439,29 @@ async def fire_schedule(
     model = sched.model
 
     try:
-        runtime = factory(sched)
-        result = runtime.turn(sched.prompt)
-        if asyncio.iscoroutine(result):
-            response = await result
+        if sched.action_kind == "kb_update":
+            from talos.lifecycle.knowledge_cli import update_kb
+
+            if not sched.kb_id:
+                raise ValueError("kb_update schedule has no kb_id set")
+            res = update_kb(kb_id_or_name=sched.kb_id)
+            if "error" in res:
+                raise RuntimeError(res["error"])
+            response = (
+                f"♻️ {sched.kb_id}: re-indexed "
+                f"{res['sources']} source(s), {res['chunks']} chunk(s)"
+            )
         else:
-            response = result
-        messages = list(getattr(runtime, "messages", []) or [])
-        usage = dict(getattr(runtime, "usage", {}) or {})
-        session_id = getattr(runtime, "session_id", session_id)
-        model = getattr(runtime, "model_name", model)
+            runtime = factory(sched)
+            result = runtime.turn(sched.prompt)
+            if asyncio.iscoroutine(result):
+                response = await result
+            else:
+                response = result
+            messages = list(getattr(runtime, "messages", []) or [])
+            usage = dict(getattr(runtime, "usage", {}) or {})
+            session_id = getattr(runtime, "session_id", session_id)
+            model = getattr(runtime, "model_name", model)
     except Exception as exc:  # noqa: BLE001 — daemon must not die on a bad fire
         status = "error"
         error = f"{type(exc).__name__}: {exc}"

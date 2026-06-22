@@ -1152,32 +1152,97 @@ def _knowledge_table(metas: list, title: str = "🗂 Knowledge bases"):
 
 @knowledge_app.command("add")
 def knowledge_add(
-    path: str = typer.Argument(..., help="File or directory to index. URLs supported in M64."),
+    path: str = typer.Argument(..., help="File or directory or http(s) URL to index."),
     name: Optional[str] = typer.Option(None, "--name", "-n", help="KB name (default: derived from path)."),
     include: list[str] = typer.Option([], "--include", help="Glob to include (repeatable, e.g. --include '**/*.md')."),
     exclude: list[str] = typer.Option([], "--exclude", help="Glob to exclude (repeatable)."),
+    schedule: Optional[str] = typer.Option(
+        None, "--schedule",
+        help='Cron OR NL ("every morning at 9") — auto-re-index on this schedule (M65).',
+    ),
 ) -> None:
-    """➕ Add a file or directory to a knowledge base."""
-    from talos.lifecycle.knowledge_cli import add_kb
+    """➕ Add a file, directory, or URL to a knowledge base.
 
-    p = Path(path).expanduser().resolve()
-    derived_name = name or (p.name if p.exists() else path)
+    With --schedule, also creates a paired Schedule whose action is
+    "re-ingest this KB". Combined with --schedule on a URL source, this
+    is the property-advisor pattern: a daily fresh-index of an
+    authoritative dataset that the agent can then query."""
+    from talos.lifecycle.knowledge_cli import add_kb, is_url
+
+    if not is_url(path):
+        path_obj = Path(path).expanduser().resolve()
+    else:
+        path_obj = path  # keep as string for the URL branch
+    derived_name = name or (
+        Path(path).name if not is_url(path) and Path(path).exists() else path
+    )
     if not derived_name:
         derived_name = "knowledge"
     try:
-        kb, n = add_kb(name=derived_name, path=p, include=include, exclude=exclude)
+        kb, n = add_kb(name=derived_name, path=path_obj, include=include, exclude=exclude)
     except RuntimeError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(2)
     if n == 0:
-        console.print(f"[yellow]🗂  no supported files found under {p}[/]")
-        console.print("[dim]check --include patterns and the file types under "
-                      "talos.lifecycle.knowledge_cli.SUPPORTED_EXTENSIONS[/]")
+        console.print(f"[yellow]🗂  no content indexed from {path}[/]")
         raise typer.Exit(1)
     console.print(
         f"[green]🗂 indexed {n} chunk(s) into [bold]{kb.meta.name}[/] "
-        f"([cyan]{kb.meta.kb_id}[/]) from {p}[/]"
+        f"([cyan]{kb.meta.kb_id}[/])[/]"
     )
+
+    if schedule:
+        # Pair a Schedule whose action is to re-ingest this KB on tick.
+        from talos.lifecycle.scheduling import (
+            Schedule, list_schedules, save_schedule, slugify, unique_id,
+            upcoming_fires, validate_cron,
+        )
+
+        # Resolve NL → cron (same flow as `talos schedule add`)
+        try:
+            resolved = validate_cron(schedule)
+        except ValueError:
+            # NL — needs the LLM
+            try:
+                import asyncio as _asyncio
+                from talos.lifecycle.scheduling import parse_nl_to_cron
+
+                async def _llm_call(system: str, user: str) -> str:
+                    from langchain_core.messages import (
+                        HumanMessage as HM, SystemMessage as SM,
+                    )
+                    from talos.agent.llm import build_llm
+                    from talos.agent.runtime import get_message_text
+
+                    msg = await build_llm().ainvoke(
+                        [SM(content=system), HM(content=user)]
+                    )
+                    return get_message_text(msg)
+
+                resolved = _asyncio.run(parse_nl_to_cron(schedule, _llm_call))
+            except Exception as exc:
+                console.print(f"[red]🗓 schedule parse failed: {exc}[/]")
+                console.print(
+                    "[dim]KB was indexed; you can pair the schedule "
+                    "later with `talos schedule add`[/]"
+                )
+                return
+        sid_base = f"kb-update-{slugify(derived_name)}"
+        sid = unique_id(sid_base, (s.id for s in list_schedules()))
+        sched = Schedule(
+            id=sid, prompt="", cron=resolved, action_kind="kb_update",
+            kb_id=kb.meta.kb_id,
+        )
+        save_schedule(sched)
+        from datetime import datetime as _dt
+        nxt = upcoming_fires(resolved, _dt.now(), 3)
+        console.print(
+            f"[green]📅 paired schedule [bold]{sid}[/] "
+            f"([magenta]{resolved}[/]) → re-ingest {kb.meta.name}[/]"
+        )
+        for t in nxt:
+            console.print(f"  [magenta]→[/] {t.strftime('%Y-%m-%d %H:%M')}")
+        console.print("[dim]start the daemon: talos schedule run[/]")
 
 
 @knowledge_app.command("show")
