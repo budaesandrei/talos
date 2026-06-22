@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -225,6 +226,77 @@ def discover_files(path: Path, *, include: list[str] | None = None,
     return out
 
 
+# ── 🌐 URL sources (M64) ──────────────────────────────────────────────
+
+
+_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def is_url(path: str | Path) -> bool:
+    return bool(_URL_RE.match(str(path)))
+
+
+def _substitute_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Run vault substitution over header values so ``{{secret:ghpat}}``
+    in a header expands at fetch time. The model isn't in the loop here
+    (this is fetch-from-user-action), so opacity is preserved."""
+    from talos.infra.vault import substitute
+
+    out: dict[str, str] = {}
+    for k, v in (headers or {}).items():
+        resolved, _missing = substitute(v)
+        out[k] = resolved
+    return out
+
+
+def _html_to_text(html: str, url: str) -> str:
+    """Strip nav/boilerplate from HTML and return the article-ish body.
+    Falls back to a naive tag-strip if trafilatura isn't installed."""
+    try:
+        import trafilatura  # type: ignore
+        extracted = trafilatura.extract(
+            html, url=url, include_comments=False, include_tables=True,
+        )
+        if extracted:
+            return extracted
+    except ImportError:
+        pass
+    # Fallback: ultra-minimal tag stripper
+    return re.sub(r"<[^>]+>", " ", html)
+
+
+def fetch_url(url: str, *, headers: dict[str, str] | None = None,
+              timeout: int = 30) -> str:
+    """GET ``url`` and return text. HTML pages run through trafilatura;
+    other content-types decode as utf-8 (replace on errors)."""
+    import httpx
+
+    headers = _substitute_headers(headers or {})
+    headers.setdefault("User-Agent", "Talos/1.0 (knowledge-base ingest)")
+    resp = httpx.get(url, headers=headers, timeout=timeout,
+                      follow_redirects=True)
+    resp.raise_for_status()
+    ctype = resp.headers.get("content-type", "").lower()
+    if "html" in ctype:
+        return _html_to_text(resp.text, url)
+    return resp.text
+
+
+# Default fetcher injectable for tests
+_default_fetcher = fetch_url
+
+
+def configure_fetcher(fn) -> None:
+    """Test helper — swap out the real httpx fetcher for a fake."""
+    global _default_fetcher
+    _default_fetcher = fn
+
+
+def reset_fetcher() -> None:
+    global _default_fetcher
+    _default_fetcher = fetch_url
+
+
 # ── ✏️ KB CRUD on user-set KBs ────────────────────────────────────────
 
 
@@ -248,6 +320,33 @@ def add_kb(
     embedder = embedder or get_embedder()
     kb = KnowledgeBase.open(name=name, dir=root, kind="files",
                              embedder=embedder)
+
+    # 🌐 URL source path (M64) — fetch + chunk + index as one source.
+    if is_url(path):
+        url = str(path)
+        try:
+            text = _default_fetcher(url)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"fetch failed for {url}: {exc}") from exc
+        if not text.strip():
+            return kb, 0
+        kb.remove_source(url)
+        chunks_url = [
+            Chunk(text=piece, source_id=url, chunk_index=i,
+                  metadata={"url": url, "name": url, "kb_name": name})
+            for i, piece in enumerate(split_text(text))
+        ]
+        n = kb.add_chunks(chunks_url)
+        manifest = load_manifest(kb.dir) or UserKBManifest(
+            kb_id=kb.meta.kb_id, name=name,
+        )
+        src = KBSource(path=url, kind="url",
+                       include=list(include or []), exclude=list(exclude or []))
+        manifest.sources = [s for s in manifest.sources if s.path != src.path]
+        manifest.sources.append(src)
+        save_manifest(kb.dir, manifest)
+        return kb, n
+
     path = Path(path).resolve()
     files = discover_files(path, include=include, exclude=exclude)
     if not files:
@@ -351,7 +450,23 @@ def update_kb(
     sources_done = 0
     for src in manifest.sources:
         if src.kind == "url":
-            # M64 territory — handled there; skip in M63
+            try:
+                text = _default_fetcher(src.path)
+            except Exception:
+                continue
+            if not text.strip():
+                continue
+            kb.remove_source(src.path)
+            url_chunks = [
+                Chunk(text=piece, source_id=src.path, chunk_index=i,
+                      metadata={"url": src.path, "name": src.path,
+                                "kb_name": manifest.name})
+                for i, piece in enumerate(split_text(text))
+            ]
+            if url_chunks:
+                kb.add_chunks(url_chunks)
+                total_chunks += len(url_chunks)
+                sources_done += 1
             continue
         path = Path(src.path)
         files = discover_files(path, include=src.include, exclude=src.exclude)
