@@ -1155,6 +1155,63 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     console.print("[green]🔄 handed off to /plan — the cycle continues[/]")
 
 
+def reprint_history(rt: "Runtime") -> int:
+    """🖨️ Render a resumed session's messages to the terminal so the user
+    can scroll up and see what was previously discussed (M62).
+
+    Same look as live streaming — user prefix in golden, agent header,
+    tool-call dim one-liners — just rendered all at once before the
+    prompt appears. Gap-notice SystemMessages (M58) are filtered out;
+    they were UI hints, not conversation. Returns the count of
+    visible messages rendered (for the closing separator)."""
+    from talos.agent.time_awareness import is_gap_notice
+    from talos.memory.compaction import is_summary
+
+    visible: list[BaseMessage] = []
+    for m in rt.messages:
+        if is_gap_notice(m):
+            continue
+        if isinstance(m, SystemMessage) and not is_summary(m):
+            continue
+        visible.append(m)
+    if not visible:
+        return 0
+
+    console.print(f"\n[dim]─── resumed ({len(visible)} message(s)) "
+                  + "─" * 40 + "[/]")
+    for m in visible:
+        if isinstance(m, HumanMessage):
+            text = get_message_text(m)
+            # match the live `→ <text>` prefix style from the REPL
+            console.print(f"[bold #ffd75f]→[/] {text}", highlight=False)
+        elif isinstance(m, AIMessage):
+            console.print(rt._header(), highlight=False)
+            text = get_message_text(m)
+            if text.strip():
+                if settings.markdown:
+                    console.print(Markdown(text))
+                else:
+                    console.print(text, highlight=False, markup=False)
+            for call in (m.tool_calls or []):
+                emoji = TOOL_EMOJI.get(call["name"], "🔧")
+                console.print(
+                    f"[dim]{emoji} {call['name']}({_args_preview(call['args'])})[/]"
+                )
+        elif isinstance(m, ToolMessage):
+            text = get_message_text(m).strip()
+            first = text.splitlines()[0] if text else ""
+            extra = ""
+            line_count = len(text.splitlines())
+            if line_count > 1:
+                extra = f" (+{line_count - 1} lines)"
+            console.print(f"[dim]   ↳ ✓ {first[:120]}{extra}[/]")
+        elif isinstance(m, SystemMessage):
+            # The compaction summary — render as a folded marker
+            console.print(f"[dim italic]📓 (compacted summary of older turns)[/]")
+    console.print(f"[dim]" + "─" * 60 + "[/]\n")
+    return len(visible)
+
+
 async def run_once(prompt: str, model: str | None = None, yolo: bool = False) -> None:
     """⚡ One-shot mode: single turn, then exit (good for scripts/pipes).
 
@@ -1197,6 +1254,11 @@ async def repl(
         title=rt.title,
         last_active=last_active_str,
     )
+
+    # 🖨️ M62: reprint prior turns so the user can scroll up and see
+    # what was previously discussed (kiro-style resume UX).
+    if resume and rt.messages:
+        reprint_history(rt)
 
     # ⚠️ no credentials configured → the model name shown is just the
     # default; a real request would 401. Tell the user plainly rather than

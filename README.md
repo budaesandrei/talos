@@ -28,6 +28,7 @@ Every feature category a modern agent has, implemented minimally:
 | 🔐 Vault (secrets + scoped values) | `infra/vault.py` | [18 — vault](docs/18-vault.md) |
 | ⏱ Time-awareness | `agent/time_awareness.py` | [19 — time](docs/19-time-awareness.md) |
 | 🐚 Shell escape (`!cmd`/`!!cmd`) | `tools/shell_escape.py` | [20 — shell escape](docs/20-shell-escape.md) |
+| 💬 Sessions, search, fuzzy resume | `memory/sessions_kb.py`, `memory/knowledge.py` | [21 — sessions](docs/21-sessions-and-search.md) |
 | 🔗 Cross-agent linking · 👥 teams · 👁 vision · 🚧 policy · 🔭 tracing | various | see docs |
 
 ## 🚀 Quickstart
@@ -118,6 +119,7 @@ git checkout <hash>      # time-travel to any milestone and poke around
 | M55–M57 | vault for secrets/scoped values, three scopes (session/project/global), substitution + scrubbing |
 | M58 | time-awareness: per-message timestamps, gap detection, resume banner, time-aware compaction |
 | M59 | shell escape: !cmd shares with the agent, !!cmd silent — no LLM, no gate, no sandbox |
+| M60–M62 | sessions go global; vector KB primitive; search CLI + fuzzy resume + reprint on resume |
 
 Start at [docs/01-config.md](docs/01-config.md) → each guide links the next.
 
