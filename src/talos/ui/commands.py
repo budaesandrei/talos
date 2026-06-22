@@ -28,6 +28,7 @@ BUILTINS = {
     "/evolve": "🔄 lifecycle loop: debt → persona research → requirements → plan",
     "/runs": "📬 show recent scheduled-task runs (📅 talos schedule …)",
     "/vault": "🔐 list vault handles · /vault unredact | redact toggles scrubbing",
+    "/knowledge": "🗂 list user knowledge bases (manage with `talos knowledge ...`)",
     "/exit": "quit (also /quit)",
 }
 

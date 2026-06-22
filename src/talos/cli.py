@@ -1124,3 +1124,201 @@ def vault_remove(
     else:
         console.print(f"[red]no entry named {handle!r} in scope={scope}[/]")
         raise typer.Exit(1)
+
+
+# ── 🗂 /knowledge — user-set knowledge bases (M63) ────────────────────
+# `talos knowledge add|show|list|update|remove|clear`. Sits on top of
+# the M60 KB primitive; only lists user-set KBs (the SessionsKB has
+# its own dedicated home and its own CLI verbs).
+
+knowledge_app = typer.Typer(
+    no_args_is_help=True,
+    help="🗂 Knowledge bases: index files/dirs so the agent can semantic-search them.",
+)
+app.add_typer(knowledge_app, name="knowledge")
+
+
+def _knowledge_table(metas: list, title: str = "🗂 Knowledge bases"):
+    table = Table(title=title)
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_column("name")
+    table.add_column("kind", style="dim")
+    table.add_column("embedder", style="dim")
+    table.add_column("created", style="dim")
+    for m in metas:
+        table.add_row(m.kb_id, m.name, m.kind, m.embedder_name, m.created_at)
+    return table
+
+
+@knowledge_app.command("add")
+def knowledge_add(
+    path: str = typer.Argument(..., help="File or directory to index. URLs supported in M64."),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="KB name (default: derived from path)."),
+    include: list[str] = typer.Option([], "--include", help="Glob to include (repeatable, e.g. --include '**/*.md')."),
+    exclude: list[str] = typer.Option([], "--exclude", help="Glob to exclude (repeatable)."),
+) -> None:
+    """➕ Add a file or directory to a knowledge base."""
+    from talos.lifecycle.knowledge_cli import add_kb
+
+    p = Path(path).expanduser().resolve()
+    derived_name = name or (p.name if p.exists() else path)
+    if not derived_name:
+        derived_name = "knowledge"
+    try:
+        kb, n = add_kb(name=derived_name, path=p, include=include, exclude=exclude)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    if n == 0:
+        console.print(f"[yellow]🗂  no supported files found under {p}[/]")
+        console.print("[dim]check --include patterns and the file types under "
+                      "talos.lifecycle.knowledge_cli.SUPPORTED_EXTENSIONS[/]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]🗂 indexed {n} chunk(s) into [bold]{kb.meta.name}[/] "
+        f"([cyan]{kb.meta.kb_id}[/]) from {p}[/]"
+    )
+
+
+@knowledge_app.command("show")
+def knowledge_show(
+    kb_id_or_name: Optional[str] = typer.Argument(
+        None, help="KB id or name. Omit to list all KBs.",
+    ),
+) -> None:
+    """🔎 List user-set KBs, or show one KB's sources + chunk count."""
+    from talos.lifecycle.knowledge_cli import (
+        kb_root_user, list_user_kbs, load_manifest, open_user_kb,
+    )
+
+    if kb_id_or_name is None:
+        metas = list_user_kbs()
+        if not metas:
+            console.print("[dim]🗂 no user knowledge bases yet — "
+                          "try: talos knowledge add ~/path/to/docs[/]")
+            return
+        console.print(_knowledge_table(metas))
+        return
+    kb = (open_user_kb(kb_id=kb_id_or_name)
+          or open_user_kb(name=kb_id_or_name))
+    if kb is None:
+        console.print(f"[red]no KB named {kb_id_or_name!r}[/]")
+        raise typer.Exit(1)
+    console.print(f"[cyan]{kb.meta.kb_id}[/]  ·  {kb.meta.name}  ·  "
+                  f"{kb.count()} chunk(s)  ·  embedder {kb.meta.embedder_name}")
+    manifest = load_manifest(kb.dir)
+    if manifest and manifest.sources:
+        st = Table(title="📁 sources", show_header=True, header_style="dim")
+        st.add_column("path")
+        st.add_column("kind")
+        st.add_column("added")
+        for s in manifest.sources:
+            st.add_row(s.path, s.kind, s.added_at)
+        console.print(st)
+
+
+@knowledge_app.command("list")
+def knowledge_list() -> None:
+    """🗂 List user-set KBs (alias for `show` with no arg)."""
+    knowledge_show(None)
+
+
+@knowledge_app.command("update")
+def knowledge_update(
+    kb_id_or_name: Optional[str] = typer.Argument(
+        None, help="KB to re-ingest. Omit to update every user KB.",
+    ),
+) -> None:
+    """♻️  Re-ingest a KB's sources (or all KBs) from their original paths."""
+    from talos.lifecycle.knowledge_cli import list_user_kbs, update_kb
+
+    targets = (
+        [kb_id_or_name] if kb_id_or_name
+        else [m.kb_id for m in list_user_kbs()]
+    )
+    if not targets:
+        console.print("[dim]no KBs to update[/]")
+        return
+    for target in targets:
+        res = update_kb(kb_id_or_name=target)
+        if "error" in res:
+            console.print(f"[red]{res['error']}[/]")
+        else:
+            console.print(
+                f"[green]♻️ {target}: {res['sources']} source(s), "
+                f"{res['chunks']} chunk(s)[/]"
+            )
+
+
+@knowledge_app.command("remove")
+def knowledge_remove(
+    kb_id_or_name: str = typer.Argument(..., help="KB to delete."),
+) -> None:
+    """🗑️  Delete a knowledge base (this only — does not touch sessions)."""
+    from talos.lifecycle.knowledge_cli import remove_kb
+
+    if remove_kb(kb_id_or_name=kb_id_or_name):
+        console.print(f"[green]🗑️  removed {kb_id_or_name!r}[/]")
+    else:
+        console.print(f"[red]no KB named {kb_id_or_name!r}[/]")
+        raise typer.Exit(1)
+
+
+@knowledge_app.command("clear")
+def knowledge_clear(
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    """🧹 Delete EVERY user knowledge base (does not touch sessions)."""
+    from talos.lifecycle.knowledge_cli import clear_all_kbs, list_user_kbs
+
+    metas = list_user_kbs()
+    if not metas:
+        console.print("[dim]nothing to clear[/]")
+        return
+    if not yes:
+        try:
+            console.print(
+                f"[yellow]⚠️ this will delete {len(metas)} knowledge base(s). "
+                r"continue? \[y/N] ›[/] ", end="",
+            )
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+    n = clear_all_kbs()
+    console.print(f"[green]🧹 removed {n} knowledge base(s)[/]")
+
+
+@knowledge_app.command("search")
+def knowledge_search(
+    query: str = typer.Argument(..., help="What to look for, in natural language."),
+    k: int = typer.Option(5, "--k", "-k"),
+    kb: Optional[str] = typer.Option(
+        None, "--kb", help="Restrict to one KB by id or name.",
+    ),
+) -> None:
+    """🔍 Semantic search across user knowledge bases."""
+    from talos.lifecycle.knowledge_cli import search_user_kbs
+
+    hits = search_user_kbs(query, k=k, kb_id_or_name=kb)
+    if not hits:
+        console.print("[dim]no matches[/]")
+        return
+    table = Table(title=f"🔍 {query!r}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("kb", style="cyan")
+    table.add_column("source", style="dim")
+    table.add_column("score", justify="right", style="dim")
+    table.add_column("snippet", style="dim")
+    for i, h in enumerate(hits, 1):
+        src = h.get("name") or h["source"]
+        if len(src) > 40:
+            src = "…" + src[-37:]
+        snip = h["snippet"]
+        if len(snip) > 80:
+            snip = snip[:77] + "…"
+        table.add_row(str(i), h["kb_name"], src, f"{h['score']:.2f}", snip)
+    console.print(table)

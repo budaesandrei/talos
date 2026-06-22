@@ -1585,6 +1585,28 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
             console.print(f"[dim]🧜 opened {path}[/]")
         else:
             console.print("[dim]no mermaid blocks in the last reply[/]")
+    elif name == "/knowledge":
+        # 🗂 In-chat listing of user-set knowledge bases. Management
+        # (add/remove/update) stays in the CLI (`talos knowledge ...`) for
+        # write-action visibility.
+        from talos.lifecycle.knowledge_cli import list_user_kbs
+
+        metas = list_user_kbs()
+        if not metas:
+            console.print(
+                "[dim]🗂 no user knowledge bases yet — try: "
+                "talos knowledge add ~/path/to/docs[/]"
+            )
+            return
+        table = Table(title=f"🗂 user knowledge bases ({len(metas)})",
+                      show_header=True, header_style="dim")
+        table.add_column("id", style="cyan", no_wrap=True)
+        table.add_column("name")
+        table.add_column("kind", style="dim")
+        table.add_column("embedder", style="dim")
+        for m in metas:
+            table.add_row(m.kb_id, m.name, m.kind, m.embedder_name)
+        console.print(table)
     elif name == "/vault":
         # 🔐 In-chat vault view + redaction toggle. List handles like
         # `talos vault list`, plus subcommands for the session-scoped

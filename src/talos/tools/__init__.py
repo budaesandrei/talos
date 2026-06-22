@@ -16,6 +16,10 @@ from talos.tools.skill_tool import load_skill
 from talos.tools.task_tool import task
 from talos.tools.team_tool import team
 from talos.tools.self_tool import read_self
+from talos.tools.knowledge_tool import (
+    add_kb_tool, list_kbs_tool, recall_knowledge, remove_kb_tool,
+    update_kb_tool,
+)
 from talos.tools.sessions_tool import list_sessions_tool, search_sessions_tool
 from talos.tools.vault_tool import vault_get
 from talos.tools.web import web_fetch
@@ -38,6 +42,11 @@ def get_tools() -> list[BaseTool]:
         read_self,
         list_sessions_tool,
         search_sessions_tool,
+        recall_knowledge,
+        list_kbs_tool,
+        add_kb_tool,
+        update_kb_tool,
+        remove_kb_tool,
         vault_get,
         task,
         team,
