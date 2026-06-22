@@ -9,6 +9,8 @@ from talos.memory.sessions import latest_session_id, list_sessions, load_session
 
 def test_rules_file_lands_in_system_prompt(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
     (tmp_path / "TALOS.md").write_text("Always answer in haiku.", encoding="utf-8")
     prompt = build_system_prompt()
     assert "Always answer in haiku." in prompt
@@ -17,6 +19,8 @@ def test_rules_file_lands_in_system_prompt(tmp_path, monkeypatch):
 
 def test_memory_roundtrip_and_prompt_injection(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
     assert load_memory() == ""
     append_memory("user prefers tabs")
     assert "user prefers tabs" in load_memory()
@@ -25,6 +29,8 @@ def test_memory_roundtrip_and_prompt_injection(tmp_path, monkeypatch):
 
 def test_session_save_load_roundtrip(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
     msgs = [HumanMessage(content="hi"), AIMessage(content="hello")]
     save_session("20260101-000000", msgs)
     loaded = load_session("20260101-000000")
@@ -51,6 +57,8 @@ async def test_api_failure_does_not_kill_the_session(tmp_path, monkeypatch):
             return "exploding"
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
     monkeypatch.setattr(runner, "build_llm", lambda model=None: ExplodingModel())
 
     rt = runner.Runtime(interactive=False)
@@ -69,6 +77,8 @@ async def test_usage_is_tracked_per_turn_and_session(tmp_path, monkeypatch):
     from tests.fakes import FakeToolCallingModel
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
     reply = AIMessage(
         content="hi",
         usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
@@ -93,6 +103,8 @@ async def test_session_gets_llm_title_and_usage_persists(tmp_path, monkeypatch):
     from tests.fakes import FakeToolCallingModel
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
     calls = {"n": 0}
 
     def fake_llm(model=None):

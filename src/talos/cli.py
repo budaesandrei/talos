@@ -73,23 +73,81 @@ def run(
     asyncio.run(run_once(prompt, model, yolo=yolo))
 
 
-@app.command()
-def sessions() -> None:
-    """💾 List saved chat sessions."""
+sessions_app = typer.Typer(
+    no_args_is_help=False,
+    invoke_without_command=True,
+    help="💾 List, search, and manage saved chat sessions.",
+)
+app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.callback()
+def sessions_default(
+    ctx: typer.Context,
+    all_projects: bool = typer.Option(False, "--all", "-a", help="Show sessions from every project (default: current only)."),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter to a specific project path."),
+) -> None:
+    """💾 List saved chat sessions. Defaults to the current project; --all
+    shows every session across every project."""
+    if ctx.invoked_subcommand is not None:
+        return
     from talos.memory.sessions import list_sessions
 
-    rows = list_sessions()
+    if project:
+        scope = project
+    elif all_projects:
+        scope = "all"
+    else:
+        scope = "here"
+    rows = list_sessions(project=scope)
     if not rows:
-        console.print("[dim]no saved sessions yet — run 'talos chat'[/]")
+        if scope == "here":
+            console.print("[dim]no sessions in this project yet — try `talos sessions --all` "
+                          "for sessions across all projects, or run `talos chat`[/]")
+        else:
+            console.print("[dim]no saved sessions[/]")
         return
-    table = Table(title="💾 Sessions")
+    title_label = "💾 Sessions (this project)" if scope == "here" else (
+        f"💾 Sessions (project={scope})" if scope != "all" else "💾 Sessions (all projects)"
+    )
+    table = Table(title=title_label)
     table.add_column("id", style="cyan")
     table.add_column("title")
     table.add_column("messages", justify="right")
+    if scope != "here":
+        table.add_column("project", style="dim")
     for row in rows:
-        table.add_row(row["id"], row.get("title") or "[dim]…[/]", str(row["messages"]))
+        cells = [row["id"], row.get("title") or "[dim]…[/]", str(row["messages"])]
+        if scope != "here":
+            pp = row.get("project_path") or "[dim](legacy/unknown)[/]"
+            # truncate long absolute paths for display
+            if isinstance(pp, str) and len(pp) > 50:
+                pp = "…" + pp[-47:]
+            cells.append(pp)
+        table.add_row(*cells)
     console.print(table)
     console.print("[dim]resume with: talos chat -r <id>   (or -r latest)[/]")
+
+
+@sessions_app.command("migrate")
+def sessions_migrate() -> None:
+    """➡️  Copy any legacy `.talos/sessions/` (cwd-local) into the global
+    `~/.talos/sessions/` home introduced in M60. Idempotent — sessions
+    already present in the global dir are skipped. Each migrated session
+    is stamped with `project_path=<current cwd>` so cross-project
+    filtering still works."""
+    from talos.memory.sessions import migrate_legacy_sessions
+
+    res = migrate_legacy_sessions()
+    if res["migrated"] == 0 and res["skipped"] == 0:
+        console.print(f"[dim]nothing to migrate — no sessions in {res['from']}[/]")
+        return
+    console.print(
+        f"[green]➡️  migrated {res['migrated']} session(s)[/]"
+        f"  [dim](skipped {res['skipped']} already present)[/]"
+    )
+    console.print(f"[dim]from {res['from']}[/]")
+    console.print(f"[dim]to   {res['to']}[/]")
 
 
 @app.command()
