@@ -67,6 +67,30 @@ def build_system_prompt() -> str:
     if agents:
         parts.append(agents)
 
+    # 🪞 self-knowledge: a compact index of Talos's own source so the agent
+    # can answer "where would I add X?" without grepping. Lazy on errors —
+    # a malformed cache must never block the system prompt.
+    try:
+        from talos.lifecycle.self_knowledge import manifest_summary
+
+        index = manifest_summary()
+        if index:
+            parts.append(index)
+    except Exception:
+        pass
+
+    # 🔐 vault: list available handles by name + description so the model
+    # knows when to use {{secret:name}} substitution in shell commands.
+    # SECRET values never enter the prompt; VALUE handles are inlined.
+    try:
+        from talos.infra.vault import vault_summary
+
+        vsum = vault_summary()
+        if vsum:
+            parts.append(vsum)
+    except Exception:
+        pass
+
     if settings.workspace_snapshot:
         try:
             from talos.agent.workspace import snapshot

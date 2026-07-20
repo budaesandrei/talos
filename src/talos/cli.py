@@ -73,23 +73,143 @@ def run(
     asyncio.run(run_once(prompt, model, yolo=yolo))
 
 
-@app.command()
-def sessions() -> None:
-    """💾 List saved chat sessions."""
+sessions_app = typer.Typer(
+    no_args_is_help=False,
+    invoke_without_command=True,
+    help="💾 List, search, and manage saved chat sessions.",
+)
+app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.callback()
+def sessions_default(
+    ctx: typer.Context,
+    all_projects: bool = typer.Option(False, "--all", "-a", help="Show sessions from every project (default: current only)."),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter to a specific project path."),
+) -> None:
+    """💾 List saved chat sessions. Defaults to the current project; --all
+    shows every session across every project."""
+    if ctx.invoked_subcommand is not None:
+        return
     from talos.memory.sessions import list_sessions
 
-    rows = list_sessions()
+    if project:
+        scope = project
+    elif all_projects:
+        scope = "all"
+    else:
+        scope = "here"
+    rows = list_sessions(project=scope)
     if not rows:
-        console.print("[dim]no saved sessions yet — run 'talos chat'[/]")
+        if scope == "here":
+            console.print("[dim]no sessions in this project yet — try `talos sessions --all` "
+                          "for sessions across all projects, or run `talos chat`[/]")
+        else:
+            console.print("[dim]no saved sessions[/]")
         return
-    table = Table(title="💾 Sessions")
+    title_label = "💾 Sessions (this project)" if scope == "here" else (
+        f"💾 Sessions (project={scope})" if scope != "all" else "💾 Sessions (all projects)"
+    )
+    table = Table(title=title_label)
     table.add_column("id", style="cyan")
     table.add_column("title")
     table.add_column("messages", justify="right")
+    if scope != "here":
+        table.add_column("project", style="dim")
     for row in rows:
-        table.add_row(row["id"], row.get("title") or "[dim]…[/]", str(row["messages"]))
+        cells = [row["id"], row.get("title") or "[dim]…[/]", str(row["messages"])]
+        if scope != "here":
+            pp = row.get("project_path") or "[dim](legacy/unknown)[/]"
+            # truncate long absolute paths for display
+            if isinstance(pp, str) and len(pp) > 50:
+                pp = "…" + pp[-47:]
+            cells.append(pp)
+        table.add_row(*cells)
     console.print(table)
     console.print("[dim]resume with: talos chat -r <id>   (or -r latest)[/]")
+
+
+@sessions_app.command("search")
+def sessions_search(
+    query: str = typer.Argument(..., help="What to look for, in natural language."),
+    k: int = typer.Option(5, "--k", "-k", help="Max number of sessions to show."),
+    all_projects: bool = typer.Option(False, "--all", "-a", help="Search across every project (default: current only)."),
+) -> None:
+    """🔍 Semantic search across saved conversations.
+
+    Returns the top-k sessions ranked by relevance to the query. Resume
+    any with: talos chat -r <id>. Or just pass natural language directly
+    to `talos chat -r` and it will do the search + confirm the match."""
+    from talos.memory import sessions, sessions_kb
+
+    project_path = None if all_projects else sessions.current_project_path()
+    kb = sessions_kb.open_sessions_kb()
+    if kb.count() == 0:
+        console.print("[yellow]🔍 the sessions index is empty[/]")
+        console.print("[dim]run `talos sessions reindex` to ingest your chat history[/]")
+        raise typer.Exit(1)
+    hits = sessions_kb.search_sessions(query, k=k, kb=kb, project_path=project_path)
+    if not hits:
+        console.print("[dim]no matching sessions[/]")
+        return
+    rolled = sessions_kb.aggregate_to_sessions(hits)
+    table = Table(title=f"🔍 Search results for {query!r}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("id", style="cyan")
+    table.add_column("title")
+    table.add_column("score", justify="right", style="dim")
+    table.add_column("snippet", style="dim")
+    for i, r in enumerate(rolled, 1):
+        meta = sessions.get_session_meta(r["session_id"]) or {}
+        title = meta.get("title") or "[dim]…[/]"
+        snip = r["snippet"] if len(r["snippet"]) < 60 else r["snippet"][:57] + "…"
+        table.add_row(str(i), r["session_id"], title, f"{r['score']:.2f}", snip)
+    console.print(table)
+    console.print("[dim]resume with: talos chat -r <id>   (or pass NL to -r for auto-resume)[/]")
+
+
+@sessions_app.command("reindex")
+def sessions_reindex(
+    all_projects: bool = typer.Option(True, "--all/--here", help="Reindex everything (default) vs only this project's sessions."),
+) -> None:
+    """♻️  Re-ingest sessions into the search index. Run after you've
+    accumulated sessions but never indexed (e.g. first time using
+    `talos sessions search`), or after the embedder changes.
+
+    Note: new sessions are auto-indexed when saved — you only need
+    reindex for catch-up or after deleting/restoring sessions."""
+    from talos.memory import sessions_kb
+
+    console.print("[dim]♻️  reindexing sessions — first run downloads the embedding model[/]")
+    kb = sessions_kb.open_sessions_kb()
+    # Wipe and re-ingest everything for simplicity
+    kb.clear()
+    res = sessions_kb.ingest_all(kb=kb)
+    console.print(
+        f"[green]♻️  indexed {res['sessions']} session(s), "
+        f"{res['chunks']} chunk(s) — into {kb.dir}[/]"
+    )
+
+
+@sessions_app.command("migrate")
+def sessions_migrate() -> None:
+    """➡️  Copy any legacy `.talos/sessions/` (cwd-local) into the global
+    `~/.talos/sessions/` home introduced in M60. Idempotent — sessions
+    already present in the global dir are skipped. Each migrated session
+    is stamped with `project_path=<current cwd>` so cross-project
+    filtering still works."""
+    from talos.memory.sessions import migrate_legacy_sessions
+
+    res = migrate_legacy_sessions()
+    if res["migrated"] == 0 and res["skipped"] == 0:
+        console.print(f"[dim]nothing to migrate — no sessions in {res['from']}[/]")
+        return
+    console.print(
+        f"[green]➡️  migrated {res['migrated']} session(s)[/]"
+        f"  [dim](skipped {res['skipped']} already present)[/]"
+    )
+    console.print(f"[dim]from {res['from']}[/]")
+    console.print(f"[dim]to   {res['to']}[/]")
 
 
 @app.command()
@@ -265,4 +385,1005 @@ def config() -> None:
     table.add_row("max_iterations", str(settings.max_iterations))
     table.add_row("yolo", str(settings.yolo))
     table.add_row("sandbox", settings.sandbox)
+    console.print(table)
+
+
+# ── 📅 scheduled tasks ─────────────────────────────────────────────────
+# Sub-typer for `talos schedule ...`. M49 ships the cron-only path; M50
+# adds NL→cron with a human gate; M51 wires up chat-time surfacing.
+
+schedule_app = typer.Typer(
+    no_args_is_help=True,
+    help="📅 Run prompts on a cron schedule (daemon + storage in .talos/schedules/).",
+)
+app.add_typer(schedule_app, name="schedule")
+
+
+def _schedule_table(scheds) -> Table:
+    """Pretty-print a list of schedules — shared between `list` and `show`."""
+    from datetime import datetime
+
+    from talos.lifecycle.scheduling import floor_for, next_fire
+
+    table = Table(title="📅 schedules")
+    table.add_column("id", style="cyan")
+    table.add_column("cron", style="magenta")
+    table.add_column("next fire")
+    table.add_column("last fire", style="dim")
+    table.add_column("✓", justify="center")
+    table.add_column("prompt", style="dim")
+    for s in scheds:
+        try:
+            nxt = next_fire(s, floor_for(s)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            nxt = "[red]?[/]"
+        status = {
+            "ok": "[green]✅[/]",
+            "error": "[red]💥[/]",
+            "skipped": "[yellow]⏭[/]",
+        }.get(s.last_status, "·")
+        prompt = s.prompt if len(s.prompt) < 50 else s.prompt[:47] + "…"
+        table.add_row(
+            s.id, s.cron, nxt, s.last_fire or "·", status, prompt,
+        )
+    return table
+
+
+@schedule_app.command("add")
+def schedule_add(
+    prompt: str = typer.Argument(..., help="The prompt the agent will run on each fire."),
+    when: Optional[str] = typer.Option(
+        None, "--when", "-w",
+        help='Cron OR natural language ("every morning at 9"). NL parses via the LLM.',
+    ),
+    cron: Optional[str] = typer.Option(
+        None, "--cron", "-c",
+        help='Cron expression — skips LLM parsing. Mutually exclusive with --when.',
+    ),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Schedule id (defaults to a slug of the prompt)."),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the model just for this schedule."),
+    yolo: bool = typer.Option(False, "--yolo", help="🛡️  Required if the schedule uses mutating tools — nobody's around to approve."),
+    resume: bool = typer.Option(False, "--resume", help="🎟️  Use one rolling session that grows across fires (vs a fresh session each fire)."),
+    tz: Optional[str] = typer.Option(None, "--tz", help="IANA timezone for cron interpretation (informational; not yet enforced)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the 'save this schedule?' confirmation prompt."),
+) -> None:
+    """➕ Add a scheduled task.
+
+    Two ways to express the schedule:
+
+      talos schedule add "summarize my inbox" --when "every morning at 9"
+      talos schedule add "summarize my inbox" --cron "0 9 * * *"
+
+    --when accepts cron OR natural language; cron syntax is tried first,
+    and if it's not valid cron we ask the LLM to translate. Either way we
+    show the resolved cron and the next 3 fire times and ask you to
+    confirm — the human gate from the /plan flow, applied to scheduling.
+    """
+    import asyncio
+    from datetime import datetime as _dt
+
+    from talos.lifecycle.scheduling import (
+        Schedule, list_schedules, parse_nl_to_cron, save_schedule, slugify,
+        unique_id, upcoming_fires, validate_cron,
+    )
+
+    if cron and when:
+        console.print("[red]use either --cron or --when, not both[/]")
+        raise typer.Exit(1)
+    if not cron and not when:
+        console.print("[red]missing schedule — pass --when 'every morning at 9' "
+                      "or --cron '0 9 * * *'[/]")
+        raise typer.Exit(1)
+
+    resolved: str
+    if cron:
+        try:
+            resolved = validate_cron(cron)
+        except (ValueError, RuntimeError) as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+    else:
+        # 🗣️ --when path: try cron first (fast, free), fall back to the LLM.
+        assert when is not None
+        try:
+            resolved = validate_cron(when)
+        except ValueError:
+            console.print(f"[dim]🗣️  parsing '{when}' via the model…[/]")
+            try:
+                async def _llm_call(system: str, user: str) -> str:
+                    # late imports keep `talos --help` fast
+                    from langchain_core.messages import (
+                        HumanMessage as HM, SystemMessage as SM,
+                    )
+                    from talos.agent.llm import build_llm
+                    from talos.agent.runtime import get_message_text
+
+                    msg = await build_llm().ainvoke(
+                        [SM(content=system), HM(content=user)]
+                    )
+                    return get_message_text(msg)
+
+                resolved = asyncio.run(parse_nl_to_cron(when, _llm_call))
+            except ValueError as exc:
+                console.print(f"[red]🗣️  couldn't parse a cron from {when!r}: {exc}[/]")
+                raise typer.Exit(1)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]🗣️  LLM call failed: {exc}[/]")
+                console.print(
+                    "[dim]tip: pass a cron explicitly with --cron, "
+                    "or check your TALOS_BASE_URL / TALOS_API_KEY in .env[/]"
+                )
+                raise typer.Exit(2)
+        except RuntimeError as exc:  # croniter not installed
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(2)
+
+    # 🚦 the human gate — show the resolved cron and the next 3 fires.
+    console.print(f"[cyan]📅 resolved cron:[/] [magenta]{resolved}[/]")
+    upcoming = upcoming_fires(resolved, _dt.now(), 3)
+    console.print("[dim]next fires:[/]")
+    for ts in upcoming:
+        console.print(f"  [magenta]→[/] {ts.strftime('%Y-%m-%d %H:%M')}")
+    if not yes:
+        try:
+            console.print(r"[yellow]save this schedule? \[Y/n] ›[/] ", end="")
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if answer and not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+
+    sid = unique_id(name or slugify(prompt), (s.id for s in list_schedules()))
+    sched = Schedule(
+        id=sid, prompt=prompt, cron=resolved, tz=tz, model=model, yolo=yolo,
+        resume=resume,
+    )
+    save_schedule(sched)
+    console.print(f"[green]📅 added [bold]{sid}[/][/] — {prompt}")
+    console.print("[dim]start the daemon with: talos schedule run[/]")
+
+
+@schedule_app.command("list")
+def schedule_list() -> None:
+    """📅 List scheduled tasks."""
+    from talos.lifecycle.scheduling import list_schedules
+
+    scheds = list_schedules()
+    if not scheds:
+        console.print("[dim]no schedules yet — try: talos schedule add 'do X' --cron '0 9 * * *'[/]")
+        return
+    console.print(_schedule_table(scheds))
+
+
+@schedule_app.command("show")
+def schedule_show(
+    schedule_id: str = typer.Argument(..., help="Schedule id to show."),
+    runs: int = typer.Option(5, "--runs", "-r", help="How many recent runs to list."),
+) -> None:
+    """🔎 Show one schedule plus its recent fires."""
+    from talos.lifecycle.scheduling import get_schedule, list_runs
+
+    sched = get_schedule(schedule_id)
+    if sched is None:
+        console.print(f"[red]no schedule named {schedule_id!r}[/]")
+        raise typer.Exit(1)
+    console.print(_schedule_table([sched]))
+    history = list_runs(schedule_id, limit=runs)
+    if not history:
+        console.print("[dim]no runs yet[/]")
+        return
+    rtable = Table(title=f"📜 last {len(history)} run(s)")
+    rtable.add_column("started", style="cyan")
+    rtable.add_column("status", justify="center")
+    rtable.add_column("dur")
+    rtable.add_column("response", style="dim")
+    icons = {"ok": "[green]✅[/]", "error": "[red]💥[/]", "skipped": "[yellow]⏭[/]"}
+    for r in history:
+        resp = (r.get("response") or "").splitlines()[0:1]
+        text = (resp[0] if resp else "")[:80]
+        dur = r.get("duration_s")
+        rtable.add_row(
+            r.get("started_at", "?"),
+            icons.get(r.get("status"), "·"),
+            f"{dur:.1f}s" if dur is not None else "·",
+            text,
+        )
+    console.print(rtable)
+
+
+@schedule_app.command("remove")
+def schedule_remove(
+    schedule_id: str = typer.Argument(..., help="Schedule id to remove."),
+) -> None:
+    """🗑️  Remove a schedule. Run history on disk is preserved."""
+    from talos.lifecycle.scheduling import remove_schedule
+
+    if remove_schedule(schedule_id):
+        console.print(f"[green]🗑️  removed [bold]{schedule_id}[/][/]")
+    else:
+        console.print(f"[red]no schedule named {schedule_id!r}[/]")
+        raise typer.Exit(1)
+
+
+@schedule_app.command("run")
+def schedule_run(
+    tick: int = typer.Option(30, "--tick", help="Seconds between scheduler ticks."),
+    once: bool = typer.Option(False, "--once", help="Run one tick and exit (useful for cron-driven setups)."),
+) -> None:
+    """🏃 Run the scheduler daemon — wakes on each tick and fires due schedules.
+
+    Stop with Ctrl-C. Fires write to ``.talos/schedules/<id>/runs/<ts>.{md,json}``;
+    on next ``talos chat`` the banner shows how many runs are unread.
+    """
+    import signal
+
+    from talos.lifecycle.scheduling import daemon_loop
+
+    stop = asyncio.Event()
+
+    def _ask_stop(*_args) -> None:
+        console.print("\n[yellow]🛑 stopping after current fires finish…[/]")
+        stop.set()
+
+    try:
+        # SIGINT works on every platform; SIGTERM is POSIX-only — guard it.
+        signal.signal(signal.SIGINT, _ask_stop)
+        if hasattr(signal, "SIGTERM"):
+            try:
+                signal.signal(signal.SIGTERM, _ask_stop)
+            except (ValueError, OSError):
+                pass  # not on the main thread or unsupported
+    except ValueError:
+        pass
+
+    def _log(msg: str) -> None:
+        console.print(f"[dim]{msg}[/]")
+
+    asyncio.run(
+        daemon_loop(
+            tick_seconds=tick,
+            stop=stop,
+            log=_log,
+            max_ticks=1 if once else None,
+        )
+    )
+
+
+# ── 🪞 self-knowledge ──────────────────────────────────────────────────
+# `talos self show / refresh` — inspect and maintain Talos's manifest of
+# its own source tree. The compact form is already in the system prompt;
+# this is the human-facing view.
+
+self_app = typer.Typer(
+    no_args_is_help=True,
+    help="🪞 Inspect Talos's knowledge of its own source tree.",
+)
+app.add_typer(self_app, name="self")
+
+
+@self_app.command("show")
+def self_show(
+    package: Optional[str] = typer.Argument(
+        None, help='Filter to one subpackage (e.g. "memory", "tools"). '
+                   'Omit to show the full manifest.',
+    ),
+    refresh: bool = typer.Option(False, "--refresh", help="Regenerate the manifest before showing it."),
+    paths_only: bool = typer.Option(False, "--paths-only", help="Print just the file paths (one per line)."),
+) -> None:
+    """🪞 Print Talos's manifest of its own source tree."""
+    from talos.lifecycle.self_knowledge import by_package, manifest
+
+    facts = manifest(force_refresh=refresh)
+    if not facts:
+        console.print("[dim]🪞 no source files indexed — is this a fresh install?[/]")
+        return
+    if package:
+        facts = [f for f in facts if f.package == package]
+        if not facts:
+            console.print(f"[red]no package named {package!r}[/]")
+            raise typer.Exit(1)
+
+    if paths_only:
+        for f in facts:
+            console.print(f.path)
+        return
+
+    # Group by package; render as a table per package.
+    groups: dict[str, list] = {}
+    for f in facts:
+        groups.setdefault(f.package, []).append(f)
+    for pkg in sorted(groups, key=lambda p: ("a" if p == "core" else "b", p)):
+        items = groups[pkg]
+        table = Table(
+            title=f"🪞 {pkg}/ ({len(items)} file{'s' if len(items) != 1 else ''})",
+            show_header=True, header_style="dim",
+        )
+        table.add_column("file", style="cyan", no_wrap=False)
+        table.add_column("purpose")
+        for f in items:
+            table.add_row(f.path, f.purpose)
+        console.print(table)
+
+
+@self_app.command("refresh")
+def self_refresh() -> None:
+    """♻️  Force-regenerate the manifest cache (.talos/self/manifest.json)."""
+    from talos.lifecycle.self_knowledge import manifest, manifest_file
+
+    facts = manifest(force_refresh=True)
+    console.print(
+        f"[green]🪞 wrote {manifest_file()} — {len(facts)} module(s) indexed[/]"
+    )
+
+
+@self_app.command("read")
+def self_read(
+    file_path: str = typer.Argument(..., help='Path inside src/talos/, e.g. "memory/sessions.py".'),
+) -> None:
+    """📖 Print one file from Talos's source — the human-facing equivalent
+    of what the agent's ``read_self`` tool does."""
+    from talos.lifecycle.self_knowledge import deep_read
+
+    try:
+        text = deep_read(file_path)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    console.print(text, highlight=False)
+
+
+@self_app.command("edit")
+def self_edit(
+    request: str = typer.Argument(..., help='What you want Talos to change about itself, in plain English.'),
+    skip_tests: bool = typer.Option(False, "--skip-tests", help="Skip the test gate (faster; not recommended)."),
+    keep_worktree: bool = typer.Option(False, "--keep-worktree", help="Don't delete the worktree afterwards — for poking around."),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model the sub-agent should use."),
+) -> None:
+    """🔧 Propose a self-edit. Runs a sub-agent in an isolated git
+    worktree, captures the diff, runs the test suite, and persists the
+    candidate to .talos/self-edits/<id>/ for review.
+
+    This produces a *candidate* — it does NOT apply anything to the main
+    checkout. Use `talos self review` to inspect candidates and `talos
+    self apply` (M54) to merge one in.
+    """
+    from talos.lifecycle.self_edit import default_sub_agent, run_self_edit
+
+    def _runner(worktree, req):
+        return default_sub_agent(worktree, req, model=model)
+
+    def _log(msg: str) -> None:
+        console.print(f"[dim]{msg}[/]")
+
+    try:
+        candidate = asyncio.run(run_self_edit(
+            request,
+            sub_agent_fn=_runner,
+            skip_tests=skip_tests,
+            keep_worktree=keep_worktree,
+            log=_log,
+        ))
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    icon = "✅" if candidate.test_passed else "❌"
+    console.print(
+        f"\n[green]📝 candidate [bold]{candidate.edit_id}[/]:[/] "
+        f"{len(candidate.files_changed)} file(s) changed, tests {icon}"
+    )
+    if candidate.files_changed:
+        for f in candidate.files_changed:
+            console.print(f"  [cyan]·[/] {f}")
+    if candidate.sub_agent_error:
+        console.print(f"[yellow]⚠️ sub-agent error: {candidate.sub_agent_error}[/]")
+    console.print(
+        f"[dim]review with: talos self review {candidate.edit_id}[/]"
+    )
+
+
+@self_app.command("review")
+def self_review(
+    edit_id: Optional[str] = typer.Argument(None, help="Candidate id (omit to list)."),
+    diff: bool = typer.Option(False, "--diff", help="Print the full diff."),
+    tests: bool = typer.Option(False, "--tests", help="Print the full pytest output."),
+) -> None:
+    """📋 List self-edit candidates, or show one in detail."""
+    from talos.lifecycle.self_edit import candidate_dir, list_candidates, load_candidate
+
+    if edit_id is None:
+        cands = list_candidates()
+        if not cands:
+            console.print("[dim]no self-edit candidates yet — try: talos self edit '...'[/]")
+            return
+        table = Table(title=f"📋 self-edit candidates ({len(cands)})")
+        table.add_column("id", style="cyan", no_wrap=True)
+        table.add_column("when", style="dim")
+        table.add_column("✓", justify="center")
+        table.add_column("files", justify="right")
+        table.add_column("request", style="dim")
+        for c in cands:
+            req = c.request if len(c.request) < 60 else c.request[:57] + "…"
+            icon = "[green]✅[/]" if c.test_passed else "[red]❌[/]"
+            table.add_row(c.edit_id, c.created_at, icon,
+                          str(len(c.files_changed)), req)
+        console.print(table)
+        return
+
+    cand = load_candidate(edit_id)
+    if cand is None:
+        console.print(f"[red]no candidate named {edit_id!r}[/]")
+        raise typer.Exit(1)
+    icon = "[green]✅[/]" if cand.test_passed else "[red]❌[/]"
+    console.print(f"[cyan]{cand.edit_id}[/]  ·  {icon}  ·  {cand.created_at}")
+    console.print(f"\n[bold]Request:[/] {cand.request}")
+    console.print(f"\n[bold]Files changed ({len(cand.files_changed)}):[/]")
+    for f in cand.files_changed:
+        console.print(f"  · {f}")
+    if cand.sub_agent_error:
+        console.print(f"\n[yellow]⚠️ sub-agent error:[/] {cand.sub_agent_error}")
+    console.print(f"\n[dim]→ {candidate_dir(cand.edit_id)}[/]")
+    if diff:
+        console.print("\n[bold]Diff:[/]")
+        console.print(cand.diff or "(empty)", highlight=False, markup=False)
+    if tests:
+        console.print("\n[bold]Tests:[/]")
+        console.print(cand.test_output or "(none)", highlight=False, markup=False)
+
+
+@self_app.command("apply")
+def self_apply(
+    edit_id: str = typer.Argument(..., help="Candidate id from `talos self review`."),
+    force: bool = typer.Option(False, "--force", help="Override the protected-files refusal. Be careful."),
+    no_commit: bool = typer.Option(False, "--no-commit", help="Apply the diff to the working tree but don't auto-commit."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """🧩 Apply a self-edit candidate to the main checkout.
+
+    Requires the candidate to have passed tests; --force overrides
+    protected-file refusal. After a successful apply you should
+    restart any running Talos process — the in-memory code may no
+    longer match what's on disk.
+    """
+    from talos.lifecycle.self_edit import apply_candidate, load_candidate
+
+    cand = load_candidate(edit_id)
+    if cand is None:
+        console.print(f"[red]no candidate named {edit_id!r}[/]")
+        raise typer.Exit(1)
+    if not cand.test_passed:
+        console.print("[red]🚫 refusing to apply — tests failed for this candidate[/]")
+        console.print(f"[dim]see: talos self review {edit_id} --tests[/]")
+        raise typer.Exit(2)
+    if cand.verifier_verdict and cand.verifier_verdict.get("recommendation") == "reject":
+        console.print("[red]🚫 refusing to apply — verifier recommended REJECT[/]")
+        console.print(f"[dim]see: talos self review {edit_id}[/]")
+        raise typer.Exit(2)
+    if cand.protected_violations and not force:
+        console.print(
+            "[red]🛡️  refusing to apply — touches protected file(s):[/]"
+        )
+        for f in cand.protected_violations:
+            console.print(f"  · {f}")
+        console.print(
+            "[dim]use --force to override (and read each file change first)[/]"
+        )
+        raise typer.Exit(3)
+
+    console.print(f"[cyan]about to apply [bold]{edit_id}[/]:[/] {cand.request}")
+    console.print(f"  · {len(cand.files_changed)} file(s) will change")
+    if not yes:
+        try:
+            console.print(r"[yellow]proceed? \[y/N] ›[/] ", end="")
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+
+    ok, msg = apply_candidate(edit_id, force=force, commit=not no_commit)
+    if ok:
+        console.print(f"[green]✅ {msg}[/]")
+        console.print(
+            "[yellow]restart any running Talos process — the in-memory code "
+            "may no longer match what's on disk.[/]"
+        )
+    else:
+        console.print(f"[red]💥 {msg}[/]")
+        raise typer.Exit(1)
+
+
+# ── 🔐 vault ────────────────────────────────────────────────────────────
+# `talos vault add/list/show/remove` — secrets and scoped values, three-tier.
+# Storage is OS keyring by default (M55); substitution + scrubbing lands in M56.
+
+vault_app = typer.Typer(
+    no_args_is_help=True,
+    help="🔐 Secrets and scoped values the agent uses by handle, never by plaintext.",
+)
+app.add_typer(vault_app, name="vault")
+
+
+def _vault_kind_icon(kind: str) -> str:
+    return "🔒" if kind == "secret" else "📝"
+
+
+def _vault_scope_icon(scope: str) -> str:
+    return {"session": "🟡", "project": "🔵", "global": "🟢"}.get(scope, "·")
+
+
+@vault_app.command("add")
+def vault_add(
+    handle: str = typer.Argument(..., help="Short name the agent will reference, e.g. 'prod_mongo_uri'."),
+    description: str = typer.Option(
+        "", "--description", "-d",
+        help="One-line description shown to the agent so it knows when to use this handle.",
+    ),
+    kind: str = typer.Option(
+        "secret", "--kind", "-k",
+        help="'secret' (opaque to LLM, in keyring) or 'value' (visible in system prompt).",
+    ),
+    scope: str = typer.Option(
+        "project", "--scope", "-s",
+        help="'session' (in-memory), 'project' (.talos/vault/), 'global' (~/.talos/vault/).",
+    ),
+    from_env: Optional[str] = typer.Option(
+        None, "--from-env",
+        help="Read the value from the named env var instead of prompting (avoids shell history).",
+    ),
+    value: Optional[str] = typer.Option(
+        None, "--value",
+        help="Set the value inline. Discouraged for secrets — leaves it in shell history.",
+    ),
+    from_stdin: bool = typer.Option(False, "--from-stdin", help="Read the value from stdin."),
+) -> None:
+    """➕ Add a vault entry.
+
+    By default you'll be prompted (via getpass) for the value — it never
+    appears in argv or shell history. ``--from-env VAR`` and ``--from-stdin``
+    are the scripting-friendly alternatives.
+    """
+    from talos.infra.vault import add_entry
+
+    if kind not in ("secret", "value"):
+        console.print("[red]--kind must be 'secret' or 'value'[/]")
+        raise typer.Exit(1)
+    if scope not in ("session", "project", "global"):
+        console.print("[red]--scope must be 'session', 'project', or 'global'[/]")
+        raise typer.Exit(1)
+    if scope == "session":
+        console.print(
+            "[yellow]heads-up: session scope lives only in this `vault add` "
+            "process; for a session-scope value usable in chat, set it via "
+            "the /vault command inside `talos chat` (lands in M56).[/]"
+        )
+
+    # Resolve the value, in priority order.
+    if value is not None:
+        secret = value
+    elif from_env:
+        secret = os.environ.get(from_env)
+        if not secret:
+            console.print(f"[red]env var {from_env!r} is empty or unset[/]")
+            raise typer.Exit(1)
+    elif from_stdin:
+        import sys as _sys
+        secret = _sys.stdin.read().strip()
+    else:
+        import getpass
+        prompt = f"value for {handle} ({kind}, {scope}): "
+        try:
+            secret = getpass.getpass(prompt) if kind == "secret" \
+                else typer.prompt(prompt, hide_input=False)
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+    if not secret:
+        console.print("[red]empty value — refusing to save[/]")
+        raise typer.Exit(1)
+
+    try:
+        entry = add_entry(handle, secret, kind=kind, description=description, scope=scope)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    console.print(
+        f"[green]🔐 added {_vault_kind_icon(entry.kind)} [bold]{entry.handle}[/]"
+        f"[/]  [dim]{_vault_scope_icon(scope)} {scope} · {entry.kind}"
+        + (f' · {entry.description}' if entry.description else '')
+        + "[/]"
+    )
+
+
+def _import_os_for_cli():
+    """The CLI module already imports asyncio/typer/rich; vault_add wants
+    os. Imported here lazily so adding it doesn't bloat startup for users
+    who never touch the vault."""
+    import os  # noqa: F401
+
+
+# (vault_add uses os.environ — make sure it's imported at module load)
+import os  # noqa: E402
+
+
+@vault_app.command("list")
+def vault_list(
+    scope: Optional[str] = typer.Option(
+        None, "--scope", "-s",
+        help="Filter to one scope. Omit to show all three.",
+    ),
+) -> None:
+    """🔐 List vault entries across scopes (or one scope)."""
+    from talos.infra.vault import list_entries
+
+    if scope and scope not in ("session", "project", "global"):
+        console.print("[red]--scope must be 'session', 'project', or 'global'[/]")
+        raise typer.Exit(1)
+    entries = list_entries(scope)  # type: ignore[arg-type]
+    if not entries:
+        console.print("[dim]no vault entries yet — try: talos vault add <handle> --description '...'[/]")
+        return
+    table = Table(title=f"🔐 vault entries ({len(entries)})")
+    table.add_column("handle", style="cyan", no_wrap=True)
+    table.add_column("kind", justify="center")
+    table.add_column("scope")
+    table.add_column("value / description", style="dim")
+    for e in entries:
+        body = (
+            (e.body or "")[:60] + "…" if e.body and len(e.body) > 60
+            else (e.body or e.description or "")
+        )
+        table.add_row(
+            e.handle,
+            _vault_kind_icon(e.kind) + " " + e.kind,
+            f"{_vault_scope_icon(e.scope)} {e.scope}",
+            body,
+        )
+    console.print(table)
+
+
+@vault_app.command("show")
+def vault_show(handle: str = typer.Argument(..., help="Handle to inspect.")) -> None:
+    """🔎 Show one handle's metadata. For secrets, the value is NOT printed —
+    use ``--reveal`` if you really need to see it."""
+    from talos.infra.vault import resolve
+
+    resolved = resolve(handle)
+    if resolved is None:
+        console.print(f"[red]no vault entry named {handle!r}[/]")
+        raise typer.Exit(1)
+    e = resolved.entry
+    console.print(
+        f"[cyan]{e.handle}[/]  ·  {_vault_kind_icon(e.kind)} {e.kind}  ·  "
+        f"{_vault_scope_icon(resolved.scope)} {resolved.scope}"
+    )
+    if e.description:
+        console.print(f"[dim]{e.description}[/]")
+    console.print(f"[dim]created: {e.created_at}[/]")
+    if e.kind == "value":
+        console.print(f"\n[bold]value:[/] {resolved.value}")
+    else:
+        console.print(
+            "\n[dim]value: \\[hidden — use `talos vault reveal "
+            f"{handle}` to print plaintext to the terminal][/]"
+        )
+
+
+@vault_app.command("reveal")
+def vault_reveal(
+    handle: str = typer.Argument(..., help="Handle whose value to print."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """🚨 Print a secret's plaintext to the terminal. Asks for confirmation
+    first — this is the only path that surfaces a secret outside of tool
+    substitution at exec time. Use sparingly."""
+    from talos.infra.vault import resolve
+
+    resolved = resolve(handle)
+    if resolved is None:
+        console.print(f"[red]no vault entry named {handle!r}[/]")
+        raise typer.Exit(1)
+    if not yes:
+        try:
+            console.print(
+                f"[yellow]print plaintext of {handle!r} ({resolved.scope}) "
+                r"to the terminal? \[y/N] ›[/] ", end="",
+            )
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+    console.print(resolved.value)
+
+
+@vault_app.command("remove")
+def vault_remove(
+    handle: str = typer.Argument(..., help="Handle to remove."),
+    scope: str = typer.Option(
+        "project", "--scope", "-s",
+        help="Scope to remove from (session/project/global). Default: project.",
+    ),
+) -> None:
+    """🗑️  Remove an entry from one scope. Other scopes are untouched."""
+    from talos.infra.vault import remove_entry
+
+    if scope not in ("session", "project", "global"):
+        console.print("[red]--scope must be 'session', 'project', or 'global'[/]")
+        raise typer.Exit(1)
+    if remove_entry(handle, scope=scope):  # type: ignore[arg-type]
+        console.print(f"[green]🗑️  removed [bold]{handle}[/] from {scope}[/]")
+    else:
+        console.print(f"[red]no entry named {handle!r} in scope={scope}[/]")
+        raise typer.Exit(1)
+
+
+# ── 🗂 /knowledge — user-set knowledge bases (M63) ────────────────────
+# `talos knowledge add|show|list|update|remove|clear`. Sits on top of
+# the M60 KB primitive; only lists user-set KBs (the SessionsKB has
+# its own dedicated home and its own CLI verbs).
+
+knowledge_app = typer.Typer(
+    no_args_is_help=True,
+    help="🗂 Knowledge bases: index files/dirs so the agent can semantic-search them.",
+)
+app.add_typer(knowledge_app, name="knowledge")
+
+
+def _knowledge_table(metas: list, title: str = "🗂 Knowledge bases"):
+    table = Table(title=title)
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_column("name")
+    table.add_column("kind", style="dim")
+    table.add_column("embedder", style="dim")
+    table.add_column("created", style="dim")
+    for m in metas:
+        table.add_row(m.kb_id, m.name, m.kind, m.embedder_name, m.created_at)
+    return table
+
+
+@knowledge_app.command("add")
+def knowledge_add(
+    path: str = typer.Argument(..., help="File or directory or http(s) URL to index."),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="KB name (default: derived from path)."),
+    include: list[str] = typer.Option([], "--include", help="Glob to include (repeatable, e.g. --include '**/*.md')."),
+    exclude: list[str] = typer.Option([], "--exclude", help="Glob to exclude (repeatable)."),
+    schedule: Optional[str] = typer.Option(
+        None, "--schedule",
+        help='Cron OR NL ("every morning at 9") — auto-re-index on this schedule (M65).',
+    ),
+) -> None:
+    """➕ Add a file, directory, or URL to a knowledge base.
+
+    With --schedule, also creates a paired Schedule whose action is
+    "re-ingest this KB". Combined with --schedule on a URL source, this
+    is the property-advisor pattern: a daily fresh-index of an
+    authoritative dataset that the agent can then query."""
+    from talos.lifecycle.knowledge_cli import add_kb, is_url
+
+    if not is_url(path):
+        path_obj = Path(path).expanduser().resolve()
+    else:
+        path_obj = path  # keep as string for the URL branch
+    derived_name = name or (
+        Path(path).name if not is_url(path) and Path(path).exists() else path
+    )
+    if not derived_name:
+        derived_name = "knowledge"
+    try:
+        kb, n = add_kb(name=derived_name, path=path_obj, include=include, exclude=exclude)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    if n == 0:
+        console.print(f"[yellow]🗂  no content indexed from {path}[/]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]🗂 indexed {n} chunk(s) into [bold]{kb.meta.name}[/] "
+        f"([cyan]{kb.meta.kb_id}[/])[/]"
+    )
+
+    if schedule:
+        # Pair a Schedule whose action is to re-ingest this KB on tick.
+        from talos.lifecycle.scheduling import (
+            Schedule, list_schedules, save_schedule, slugify, unique_id,
+            upcoming_fires, validate_cron,
+        )
+
+        # Resolve NL → cron (same flow as `talos schedule add`)
+        try:
+            resolved = validate_cron(schedule)
+        except ValueError:
+            # NL — needs the LLM
+            try:
+                import asyncio as _asyncio
+                from talos.lifecycle.scheduling import parse_nl_to_cron
+
+                async def _llm_call(system: str, user: str) -> str:
+                    from langchain_core.messages import (
+                        HumanMessage as HM, SystemMessage as SM,
+                    )
+                    from talos.agent.llm import build_llm
+                    from talos.agent.runtime import get_message_text
+
+                    msg = await build_llm().ainvoke(
+                        [SM(content=system), HM(content=user)]
+                    )
+                    return get_message_text(msg)
+
+                resolved = _asyncio.run(parse_nl_to_cron(schedule, _llm_call))
+            except Exception as exc:
+                console.print(f"[red]🗓 schedule parse failed: {exc}[/]")
+                console.print(
+                    "[dim]KB was indexed; you can pair the schedule "
+                    "later with `talos schedule add`[/]"
+                )
+                return
+        sid_base = f"kb-update-{slugify(derived_name)}"
+        sid = unique_id(sid_base, (s.id for s in list_schedules()))
+        sched = Schedule(
+            id=sid, prompt="", cron=resolved, action_kind="kb_update",
+            kb_id=kb.meta.kb_id,
+        )
+        save_schedule(sched)
+        from datetime import datetime as _dt
+        nxt = upcoming_fires(resolved, _dt.now(), 3)
+        console.print(
+            f"[green]📅 paired schedule [bold]{sid}[/] "
+            f"([magenta]{resolved}[/]) → re-ingest {kb.meta.name}[/]"
+        )
+        for t in nxt:
+            console.print(f"  [magenta]→[/] {t.strftime('%Y-%m-%d %H:%M')}")
+        console.print("[dim]start the daemon: talos schedule run[/]")
+
+
+@knowledge_app.command("show")
+def knowledge_show(
+    kb_id_or_name: Optional[str] = typer.Argument(
+        None, help="KB id or name. Omit to list all KBs.",
+    ),
+) -> None:
+    """🔎 List user-set KBs, or show one KB's sources + chunk count."""
+    from talos.lifecycle.knowledge_cli import (
+        kb_root_user, list_user_kbs, load_manifest, open_user_kb,
+    )
+
+    if kb_id_or_name is None:
+        metas = list_user_kbs()
+        if not metas:
+            console.print("[dim]🗂 no user knowledge bases yet — "
+                          "try: talos knowledge add ~/path/to/docs[/]")
+            return
+        console.print(_knowledge_table(metas))
+        return
+    kb = (open_user_kb(kb_id=kb_id_or_name)
+          or open_user_kb(name=kb_id_or_name))
+    if kb is None:
+        console.print(f"[red]no KB named {kb_id_or_name!r}[/]")
+        raise typer.Exit(1)
+    console.print(f"[cyan]{kb.meta.kb_id}[/]  ·  {kb.meta.name}  ·  "
+                  f"{kb.count()} chunk(s)  ·  embedder {kb.meta.embedder_name}")
+    manifest = load_manifest(kb.dir)
+    if manifest and manifest.sources:
+        st = Table(title="📁 sources", show_header=True, header_style="dim")
+        st.add_column("path")
+        st.add_column("kind")
+        st.add_column("added")
+        for s in manifest.sources:
+            st.add_row(s.path, s.kind, s.added_at)
+        console.print(st)
+
+
+@knowledge_app.command("list")
+def knowledge_list() -> None:
+    """🗂 List user-set KBs (alias for `show` with no arg)."""
+    knowledge_show(None)
+
+
+@knowledge_app.command("update")
+def knowledge_update(
+    kb_id_or_name: Optional[str] = typer.Argument(
+        None, help="KB to re-ingest. Omit to update every user KB.",
+    ),
+) -> None:
+    """♻️  Re-ingest a KB's sources (or all KBs) from their original paths."""
+    from talos.lifecycle.knowledge_cli import list_user_kbs, update_kb
+
+    targets = (
+        [kb_id_or_name] if kb_id_or_name
+        else [m.kb_id for m in list_user_kbs()]
+    )
+    if not targets:
+        console.print("[dim]no KBs to update[/]")
+        return
+    for target in targets:
+        res = update_kb(kb_id_or_name=target)
+        if "error" in res:
+            console.print(f"[red]{res['error']}[/]")
+        else:
+            console.print(
+                f"[green]♻️ {target}: {res['sources']} source(s), "
+                f"{res['chunks']} chunk(s)[/]"
+            )
+
+
+@knowledge_app.command("remove")
+def knowledge_remove(
+    kb_id_or_name: str = typer.Argument(..., help="KB to delete."),
+) -> None:
+    """🗑️  Delete a knowledge base (this only — does not touch sessions)."""
+    from talos.lifecycle.knowledge_cli import remove_kb
+
+    if remove_kb(kb_id_or_name=kb_id_or_name):
+        console.print(f"[green]🗑️  removed {kb_id_or_name!r}[/]")
+    else:
+        console.print(f"[red]no KB named {kb_id_or_name!r}[/]")
+        raise typer.Exit(1)
+
+
+@knowledge_app.command("clear")
+def knowledge_clear(
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    """🧹 Delete EVERY user knowledge base (does not touch sessions)."""
+    from talos.lifecycle.knowledge_cli import clear_all_kbs, list_user_kbs
+
+    metas = list_user_kbs()
+    if not metas:
+        console.print("[dim]nothing to clear[/]")
+        return
+    if not yes:
+        try:
+            console.print(
+                f"[yellow]⚠️ this will delete {len(metas)} knowledge base(s). "
+                r"continue? \[y/N] ›[/] ", end="",
+            )
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]cancelled[/]")
+            raise typer.Exit(0)
+        if not answer.startswith("y"):
+            console.print("[dim]cancelled[/]")
+            raise typer.Exit(0)
+    n = clear_all_kbs()
+    console.print(f"[green]🧹 removed {n} knowledge base(s)[/]")
+
+
+@knowledge_app.command("search")
+def knowledge_search(
+    query: str = typer.Argument(..., help="What to look for, in natural language."),
+    k: int = typer.Option(5, "--k", "-k"),
+    kb: Optional[str] = typer.Option(
+        None, "--kb", help="Restrict to one KB by id or name.",
+    ),
+) -> None:
+    """🔍 Semantic search across user knowledge bases."""
+    from talos.lifecycle.knowledge_cli import search_user_kbs
+
+    hits = search_user_kbs(query, k=k, kb_id_or_name=kb)
+    if not hits:
+        console.print("[dim]no matches[/]")
+        return
+    table = Table(title=f"🔍 {query!r}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("kb", style="cyan")
+    table.add_column("source", style="dim")
+    table.add_column("score", justify="right", style="dim")
+    table.add_column("snippet", style="dim")
+    for i, h in enumerate(hits, 1):
+        src = h.get("name") or h["source"]
+        if len(src) > 40:
+            src = "…" + src[-37:]
+        snip = h["snippet"]
+        if len(snip) > 80:
+            snip = snip[:77] + "…"
+        table.add_row(str(i), h["kb_name"], src, f"{h['score']:.2f}", snip)
     console.print(table)

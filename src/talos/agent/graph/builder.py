@@ -106,9 +106,16 @@ def build_agent_graph(
                     except Exception as exc:  # errors go to the model, not the user
                         output = f"Error: {type(exc).__name__}: {exc}"
 
+            # 🔐 vault scrub: redact any revealed secret values that
+            # might have leaked into the tool output (e.g., `cat .env`).
+            # Honest-leak defense only; the docs are explicit that an
+            # adversarial model can bypass via encoding tricks.
+            from talos.infra.vault import RevealedSecrets
+
+            scrubbed = RevealedSecrets.scrub(str(output))
             results.append(
                 ToolMessage(
-                    content=str(output),
+                    content=scrubbed,
                     tool_call_id=call["id"],
                     name=call["name"],
                 )

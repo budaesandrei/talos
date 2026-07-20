@@ -3,8 +3,8 @@
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
-from talos.graph.builder import build_agent_graph
-from talos.permissions import PermissionGate
+from talos.agent.graph.builder import build_agent_graph
+from talos.infra.permissions import PermissionGate
 
 from .fakes import FakeToolCallingModel
 

@@ -1,6 +1,8 @@
 # 01 · ⚙️ Configuration & the provider trick
 
-> Files: `config.py`, `llm.py`, `.env.example` · Milestone: M4 · Next: [02 — agent loop](02-agent-loop.md)
+> Previous: [00 — project structure](00-project-structure.md)
+
+> Files: `config.py`, `agent/llm.py`, `.env.example` · Milestone: M4 · Next: [02 — agent loop](02-agent-loop.md)
 
 ## One class, every provider
 

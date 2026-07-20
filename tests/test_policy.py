@@ -1,7 +1,7 @@
 """Tests for the policy layer + sandbox wrapper (M37)."""
 
-from talos.policy import check_action
-from talos import sandbox
+from talos.infra.policy import check_action
+from talos.infra import sandbox
 
 
 def test_blocks_rm_rf_root():

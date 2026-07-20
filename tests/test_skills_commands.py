@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from talos.commands import dispatch
-from talos.skills import discover_skills, skill_body, skills_summary
+from talos.ui.commands import dispatch
+from talos.lifecycle.skills import discover_skills, skill_body, skills_summary
 from talos.tools.skill_tool import load_skill
 
 

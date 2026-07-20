@@ -1,6 +1,6 @@
 # 10 · 📇 Models, usage & cost
 
-> Files: `models.py`, parts of `runtime/runner.py`, `sessions.py` · Milestones: M17, M22, M23 · Next: [11 — plan mode](11-plan-mode.md)
+> Files: `integrations/models.py`, parts of `agent/runtime.py`, `memory/sessions.py` · Milestones: M17, M22, M23 · Next: [11 — plan mode](11-plan-mode.md)
 
 ## What's standard, what isn't
 

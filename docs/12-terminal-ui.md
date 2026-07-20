@@ -1,6 +1,22 @@
 # 12 · 🖥️ Terminal UI engineering
 
-> Files: `runtime/runner.py`, `tui.py`, `banner.py` · Milestones: M9, M16, M19, M25–M28
+**Input UX** (M48): the CLI prompt is a left ▏ rule (no arrow). Multi-line
+is **Alt+Enter** (also Ctrl+J) to add a line, Enter to submit — Shift+Enter
+is indistinguishable from Enter in most terminals, so Alt+Enter is the
+portable newline. On submit the prompt erases (`erase_when_done`) and the
+message is reprinted in a bordered "you" panel, rendered as **markdown** so
+pasted ```code``` fences and `inline code` display properly — and the
+border is the clean separation from the agent's reply below.
+
+**Esc to stop**: while a turn streams there is no live prompt, so a tiny
+daemon thread (`_EscWatcher` in `agent/runtime.py`) peeks at the keyboard.
+Esc once sets the graceful `stop_flag` (the graph halts at the next safe
+boundary); Esc again hard-cancels the turn. Any other key retires the
+watcher so type-ahead still reaches the next prompt. Windows-only — POSIX
+terminals keep cooked-mode type-ahead — and Ctrl-C works everywhere.
+
+
+> Files: `agent/runtime.py`, `ui/tui.py`, `ui/banner.py` · Milestones: M9, M16, M19, M25–M28
 
 A CLI agent is still a *product* — these are the TUI techniques Talos uses
 and where to read them:
@@ -18,7 +34,7 @@ whole session. On real terminals that's a persistent prompt_toolkit prompt
 reader thread. Everything else — approval dialogs, /plan questions,
 interjections — consumes from the same queue.
 
-**The inline command menu** (`tui.py`): type `/` and suggestions render in
+**The inline command menu** (`ui/tui.py`): type `/` and suggestions render in
 a **fixed window under the prompt** — kiro-style, no popup. ↑/↓ move a 💗
 highlight, the window scrolls in place, a `+N more` tail updates as you
 move, TAB/Enter accept. Built from three prompt_toolkit primitives:
@@ -46,15 +62,19 @@ repaints; and ordering matters — the banner's animation must finish
 *before* the prompt (and `patch_stdout`) start, or every frame re-prints
 as a separate block.
 
-**Flicker-free streaming** (M45): tokens print **append-only** — we never
-repaint the growing buffer. rich.Live repainting was the bug behind both
-the flicker and the "top 3 lines duplicated ×30": once an answer is taller
-than the terminal, Live can't erase what scrolled into scrollback, so each
-repaint re-emitted the visible top. Now we stream plain text, then
-re-render as markdown only when the whole answer still fits on screen
-(so the cursor-up clear is reliable) — otherwise the plain stream stands.
-💭 think mode splits a <thinking> block (dim, shown live, stripped before
-save) from the answer, handling tags split across token chunks.
+**Flicker-free streaming & clean separation** (M47): the prompt is
+**turn-based** — prompt_toolkit runs only *between* turns to read a line
+(with the inline menu); during streaming there is NO pinned prompt and NO
+`patch_stdout`. Tokens print **append-only** straight to the terminal, so
+the user's input line stays above and the agent's answer streams below
+with the `▌⚒ talos` header between them. This kills three bugs at once:
+the flicker (rich.Live / patch_stdout were repainting every token), the
+"top lines duplicated ×30" (Live can't erase what scrolled off-screen),
+and the cursor pinned in the stream. Markdown is re-rendered only when the
+answer still fits on screen (safe cursor-up clear); longer answers stay as
+the plain stream. A fallback renders the whole answer if a provider
+doesn't stream tokens. "Type while it works" interjections are now opt-in
+(`TALOS_INTERJECT=true`), since they require a pinned prompt.
 
 **Conversation chrome** (M29): the user's line is a golden `→` with the
 input text warm-highlighted and a ▮ block cursor (`CursorShape.BLOCK`);
@@ -66,17 +86,17 @@ always current, never printed into the transcript. The lesson: status
 belongs in *chrome* (re-rendered UI), history belongs in the
 *transcript* — mixing them is what makes CLI conversations unreadable.
 
-**The Textual edition** (`tui_app.py`, M31): `talos tui` is the same
+**The Textual edition** (`ui/tui_app.py`, M31): `talos tui` is the same
 brain behind a full-screen [Textual](https://textual.textualize.io)
 app — a real right sidebar (model · tokens · cost, always visible),
 styled user/agent chat blocks, modal permission dialogs, Esc for a
 graceful stop. The trade it makes: Textual owns the whole screen, so
 you lose native scrollback and pipe-friendliness — which is exactly why
 `talos chat` (prompt + stream) stays the default. The architectural
-proof: `tui_app.py` imports only UI-free modules (graph, sessions,
+proof: `ui/tui_app.py` imports only UI-free modules (graph, sessions,
 models, permissions, context). Two faces, one brain — if your rendering
 layer can't be swapped, it was never a layer.
 
-**The banner** (`banner.py`): half-block pixel art (each cell = two
+**The banner** (`ui/banner.py`): half-block pixel art (each cell = two
 pixels), centered, with a molten-bronze gradient sweep on a 24fps
 `rich.Live` — skipped when stdout isn't a terminal so pipes stay clean.

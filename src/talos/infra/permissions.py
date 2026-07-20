@@ -18,13 +18,8 @@ the model can read and react to.
 import inspect
 from collections.abc import Callable
 
-# Tools that can't mutate anything — always allowed. job_status only reads
-# logs; job_kill only touches processes this very session spawned (the spawn
-# itself was already gated at `shell` time), so both ride free.
-READ_ONLY_TOOLS = {
-    "read_file", "list_dir", "glob_files", "grep", "web_fetch",
-    "job_status", "job_kill",
-}
+# Tools that can't mutate anything — always allowed.
+READ_ONLY_TOOLS = {"read_file", "list_dir", "glob_files", "grep", "web_fetch"}
 
 # An approver looks at (tool_name, args) and answers:
 #   "y" → allow once   "a" → allow for the whole session   anything else → deny

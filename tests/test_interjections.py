@@ -5,8 +5,8 @@ import asyncio
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
-from talos.graph.builder import STOP_NOTICE, build_agent_graph
-from talos.runtime import runner
+from talos.agent.graph.builder import STOP_NOTICE, build_agent_graph
+from talos.agent import runtime as runner
 
 from .fakes import FakeToolCallingModel
 

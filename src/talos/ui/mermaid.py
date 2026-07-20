@@ -38,7 +38,7 @@ def ascii_render(block: str) -> str | None:
     try:
         proc = subprocess.run(
             [exe], input=block, capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",  # box-drawing chars ≠ cp1252
+            encoding="utf-8", errors="replace",  # box-drawing chars are not cp1252
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

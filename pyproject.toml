@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "talos"
-version = "0.2.0"
+version = "0.3.0"
 description = "🤖 Talos — a learning-first AI agent built with LangChain + LangGraph."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,9 +24,15 @@ dependencies = [
 # MCP support is optional — install with: pip install -e ".[mcp]"
 mcp = ["langchain-mcp-adapters>=0.1"]
 tui = ["textual>=1.0"]
-memory = ["kuzu>=0.4", "sqlite-vec>=0.1", "igraph>=0.11", "fastembed>=0.4"]
+memory = ["kuzu>=0.4", "sqlite-vec>=0.1", "igraph>=0.11"]
 trace = ["opentelemetry-sdk>=1.20", "opentelemetry-exporter-otlp>=1.20"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pexpect>=4.9"]
+# 📅 scheduled tasks — install with: pip install -e ".[schedule]"
+schedule = ["croniter>=2.0"]
+# 🔐 vault — install with: pip install -e ".[vault]"
+vault = ["keyring>=24.0", "cryptography>=42.0"]
+# 🗂️ knowledge bases — install with: pip install -e ".[knowledge]"
+knowledge = ["sqlite-vec>=0.1", "sentence-transformers>=2.7", "trafilatura>=1.6"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pexpect>=4.9", "croniter>=2.0", "keyring>=24.0", "cryptography>=42.0", "sqlite-vec>=0.1", "trafilatura>=1.6"]
 
 [project.scripts]
 talos = "talos.cli:app"

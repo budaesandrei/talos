@@ -1,6 +1,6 @@
 # 13 · ♾️ Long-running: compaction + graph memory
 
-> Files: `compaction.py`, `graph_memory.py` · Milestones: M33, M34 · Next: [14 — time travel](14-time-travel.md)
+> Files: `memory/compaction.py`, `memory/graph_memory.py` · Milestones: M33, M34 · Next: [14 — time travel](14-time-travel.md)
 
 The two features that turn Talos from "stateless per session" into an
 agent that never runs out of context.
@@ -41,7 +41,6 @@ flowchart TB
     L --> D{"community<br/>changed?"}
     D -- "dirty only" --> SUM["📝 LLM community summary"]
     D -- clean --> SKIP["skip (cost control)"]
-    SUM --> V["🧭 embed (topics + summaries)"]
     Q["recall_memory(query)"] --> SUM
     SUM --> LEAF["drill to topics"]
 ```
@@ -52,26 +51,3 @@ compaction, all metered. `recall_memory` lets the agent answer about
 topics from far behind the compaction horizon; with Kuzu installed it can
 also run text2cypher. Everything heavy is optional (`pip install
 'talos[memory]'`) and degrades to in-memory logic without it.
-
-## 🧭 Vector recall
-
-Set `TALOS_EMBED_MODEL` and recall switches from keyword overlap to
-**cosine similarity**. Two modes:
-
-- `local:all-MiniLM-L6-v2` — **in-process** via fastembed (ONNX, no
-  torch, no server): the model loads once (~50 MB) and embeds on CPU in
-  milliseconds. At graph-memory volume — a handful of short texts per
-  compaction — this is the recommended default.
-- `text-embedding-3-small` (OpenAI) / `nomic-embed-text` (Ollama) — via
-  the chat endpoint's OpenAI-compatible `/embeddings` API.
-
-⚠️ Vectors from different models don't mix: switch models and stored
-vectors silently stop matching (different dimensions/space) — wipe
-`.talos/memory/*.graph.json` to re-embed. At ingest, new
-topics and freshly-summarized communities are embedded in one batched
-call, and the vectors are stored *adjacent to the text they encode* in
-the graph JSON. A query then follows the GraphRAG shape: embed the query
-→ rank community summaries (global) → rank each cluster's member topics
-(local) → surface the best topic's raw source chunk, not just its
-summary. Without an embed model — or if the embedding call fails —
-everything degrades to the keyword path, so recall never breaks.

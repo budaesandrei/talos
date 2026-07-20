@@ -29,13 +29,6 @@ class Settings(BaseSettings):
     model: str = "gpt-4o-mini"
     temperature: float = 0.0
 
-    # 🧭 Embedding model for vector recall in graph memory. When set,
-    # recall ranks by cosine similarity instead of keyword overlap.
-    #   local:all-MiniLM-L6-v2  -> in-process via fastembed (no endpoint)
-    #   text-embedding-3-small  -> chat endpoint's /embeddings API
-    # Unset = keyword recall.
-    embed_model: str | None = None
-
     # 🔓 TLS certificate verification for LLM + web_fetch traffic.
     # Set TALOS_VERIFY_SSL=false ONLY if a corporate proxy re-signs your
     # traffic and you can't get its CA bundle. The better fix is to keep
@@ -52,6 +45,12 @@ class Settings(BaseSettings):
     # to disable. keep_recent = verbatim messages kept after a compaction.
     compact_at: float = 0.70
     keep_recent: int = 6
+
+    # ⌨️ Interjections: keep reading stdin WHILE the agent streams so you
+    # can type status questions / stop mid-task. Off by default because it
+    # requires a pinned prompt that some terminals render with flicker; the
+    # default turn-based UI streams cleanly with native scrollback.
+    interject: bool = False
 
     # 💭 Think mode: ask the model to reason in a <thinking> scratchpad
     # before answering (works on ANY model, not just reasoning models).
@@ -90,6 +89,13 @@ class Settings(BaseSettings):
     # 🛡️ Skip all permission prompts (same idea as kiro's --yolo /
     # claude's --dangerously-skip-permissions). CLI flag overrides this.
     yolo: bool = False
+
+    # ⏱ Time-awareness: when a new user message arrives more than this
+    # many minutes after the last message, inject a brief gap-notice
+    # SystemMessage so the model knows the conversation is being resumed
+    # rather than continued. Set to 0 to disable. The dim "gap noted"
+    # line in the terminal shows the same to you.
+    gap_minutes: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",

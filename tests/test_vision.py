@@ -2,7 +2,7 @@
 
 import base64
 
-from talos import vision
+from talos.integrations import vision
 
 
 def _png(tmp_path):

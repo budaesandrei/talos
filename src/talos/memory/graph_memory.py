@@ -14,11 +14,8 @@ The design follows Microsoft's GraphRAG (From Local to Global, 2024):
 4. 📝 **summaries**: each community gets an LLM summary — but only when
    its membership changed (dirty-tracking). That's the cost control:
    one summary call per dirty community per compaction, all metered.
-5. 🧭 **embeddings**: when TALOS_EMBED_MODEL is set, topics and community
-   summaries get vector embeddings (stored right next to the text).
-6. 🔎 **recall**: a query hits community summaries first (the "global"
-   view), then drills into leaf topics (the "local" view). With an embed
-   model this is cosine similarity; without one it degrades to keywords.
+5. 🔎 **recall**: a query hits community summaries first (the "global"
+   view), then drills into leaf topics (the "local" view).
 
 Everything heavy (kuzu, sqlite-vec, igraph) is optional — without them
 Talos still runs, just without long-term graph recall. The LLM calls are
@@ -48,17 +45,6 @@ def memory_dir() -> Path:
     return Path(".talos") / "memory"
 
 
-def _cos(a, b) -> float:
-    """Cosine similarity, pure python — graphs here are small enough that
-    a vector DB (sqlite-vec, …) would be ceremony, not speed."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(y * y for y in b) ** 0.5
-    return dot / (na * nb) if na and nb else 0.0
-
-
 # ── the in-memory model (always available, persisted to JSON) ───────────
 @dataclass
 class MemoryGraph:
@@ -69,8 +55,6 @@ class MemoryGraph:
     communities: dict = field(default_factory=dict)     # cid -> [topic names]
     summaries: dict = field(default_factory=dict)       # cid -> text
     dirty: set = field(default_factory=set)             # cids needing summary
-    vecs: dict = field(default_factory=dict)            # topic name -> [float]
-    summary_vecs: dict = field(default_factory=dict)    # cid -> [float]
 
     # --- mutation -------------------------------------------------------
     def add_topic(self, name: str, desc: str, chunk: str = "") -> None:
@@ -122,11 +106,9 @@ class MemoryGraph:
         for cid, members in self.communities.items():
             if frozenset(members) not in old:
                 self.dirty.add(cid)
-        # drop summaries (and their vectors) for communities that no longer exist
+        # drop summaries for communities that no longer exist
         self.summaries = {c: s for c, s in self.summaries.items()
                           if c in self.communities}
-        self.summary_vecs = {c: v for c, v in self.summary_vecs.items()
-                             if c in self.communities}
 
     def _connected_components(self, names, index) -> list[list[str]]:
         """Fallback clustering when igraph is missing: union-find."""
@@ -160,40 +142,15 @@ class MemoryGraph:
             rels = [f"{a} — {b}" for (a, b) in self.edges
                     if a in members and b in members]
             self.summaries[cid] = await summarize(f"community-{cid}", topics, rels)
-            self.summary_vecs.pop(cid, None)  # text changed → re-embed
             calls += 1
         self.dirty.clear()
         return calls
 
-    # --- 🧭 embeddings (vectors live adjacent to the text they encode) --
-    async def embed_missing(self, embed) -> int:
-        """Embed topics and community summaries that lack vectors.
-        ``embed`` is async (list[str]) -> list[list[float]] — injected like
-        the LLM calls, so this stays provider-agnostic and testable.
-        One batched call per compaction; returns how many texts it embedded."""
-        todo_topics = [n for n in self.topics if n not in self.vecs]
-        todo_cids = [c for c in self.summaries if c not in self.summary_vecs]
-        texts = [f"{n}: {self.topics[n]['desc']}" for n in todo_topics]
-        texts += [self.summaries[c] for c in todo_cids]
-        if not texts:
-            return 0
-        vectors = await embed(texts)
-        for n, v in zip(todo_topics, vectors):
-            self.vecs[n] = v
-        for c, v in zip(todo_cids, vectors[len(todo_topics):]):
-            self.summary_vecs[c] = v
-        return len(texts)
-
     # --- 🔎 recall ------------------------------------------------------
-    def recall(self, query: str, limit: int = 3, query_vec=None) -> str:
-        """GraphRAG-style recall: rank community summaries (global), then
-        drill into the best-matching leaf topics (local).
-
-        With ``query_vec`` (the embedded query) ranking is cosine
-        similarity against stored vectors; without it — or before any
-        vectors exist — it falls back to keyword overlap."""
-        if query_vec is not None and self.summary_vecs:
-            return self._recall_vector(query_vec, limit)
+    def recall(self, query: str, limit: int = 3) -> str:
+        """Keyword recall: rank community summaries, then drill to topics.
+        (M34 ships keyword scoring; vector recall plugs in when an embed
+        model is configured — see embeddings note in the docs.)"""
         q = set(query.lower().split())
         scored = []
         for cid, summary in self.summaries.items():
@@ -213,35 +170,6 @@ class MemoryGraph:
             blocks.append(f"### topic cluster\n{summary}\n(topics: {leaves})")
         return "\n\n".join(blocks)
 
-    def _recall_vector(self, qv, limit: int) -> str:
-        """Cosine recall: communities first (global), then rank each
-        cluster's member topics and surface the best topic's source chunk
-        — the raw text the memory came from, not just its summary."""
-        ranked = sorted(
-            ((_cos(qv, v), cid) for cid, v in self.summary_vecs.items()),
-            reverse=True,
-        )
-        blocks = []
-        for score, cid in ranked[:limit]:
-            if score <= 0:
-                continue
-            members = self.communities.get(cid, [])
-            leaves = sorted(
-                members,
-                key=lambda n: _cos(qv, self.vecs.get(n, [])),
-                reverse=True,
-            )[:5]
-            lines = [f"### topic cluster (similarity {score:.2f})",
-                     self.summaries.get(cid, "")]
-            for n in leaves:
-                t = self.topics.get(n, {})
-                lines.append(f"- {n}: {t.get('desc', '')}")
-            chunk = self.topics.get(leaves[0], {}).get("chunk") if leaves else ""
-            if chunk:
-                lines.append(f"> source excerpt: {chunk}")
-            blocks.append("\n".join(l for l in lines if l))
-        return "\n\n".join(blocks)
-
     # --- persistence ----------------------------------------------------
     def to_dict(self) -> dict:
         return {
@@ -249,10 +177,6 @@ class MemoryGraph:
             "edges": {f"{a}|{b}": w for (a, b), w in self.edges.items()},
             "communities": {str(c): v for c, v in self.communities.items()},
             "summaries": {str(c): v for c, v in self.summaries.items()},
-            # vectors round to 6 decimals: half the JSON size, same ranking
-            "vecs": {n: [round(x, 6) for x in v] for n, v in self.vecs.items()},
-            "summary_vecs": {str(c): [round(x, 6) for x in v]
-                             for c, v in self.summary_vecs.items()},
         }
 
     @classmethod
@@ -262,8 +186,6 @@ class MemoryGraph:
         g.edges = {tuple(k.split("|", 1)): w for k, w in d.get("edges", {}).items()}
         g.communities = {int(c): v for c, v in d.get("communities", {}).items()}
         g.summaries = {int(c): v for c, v in d.get("summaries", {}).items()}
-        g.vecs = d.get("vecs", {})
-        g.summary_vecs = {int(c): v for c, v in d.get("summary_vecs", {}).items()}
         return g
 
 
@@ -331,13 +253,12 @@ conversation excerpt below. Return STRICT JSON:
 Keep names short and canonical (lowercase). 3-8 topics max."""
 
 
-async def ingest_async(session_id, folded_text, extract, summarize, embed=None) -> dict:
+async def ingest_async(session_id, folded_text, extract, summarize) -> dict:
     """Run the full GraphRAG ingest for one compaction.
 
     ``extract``  : async (prompt, text) -> str (JSON)
     ``summarize``: async (label, topics, relations) -> str
-    ``embed``    : async (list[str]) -> list[list[float]], or None
-    Returns {topics_added, summary_calls, embeddings} for cost reporting.
+    Returns {topics_added, summary_calls} for cost reporting.
     """
     graph = load_graph(session_id)
     raw = await extract(EXTRACT_PROMPT, folded_text)
@@ -352,13 +273,12 @@ async def ingest_async(session_id, folded_text, extract, summarize, embed=None) 
             if isinstance(rel, list) and len(rel) == 2:
                 graph.add_relation(rel[0], rel[1])
     except (json.JSONDecodeError, TypeError, KeyError):
-        return {"topics_added": 0, "summary_calls": 0, "embeddings": 0}
+        return {"topics_added": 0, "summary_calls": 0}
 
     graph.recompute_communities()
     calls = await graph.summarize_dirty(summarize)
-    embedded = await graph.embed_missing(embed) if embed else 0
     save_graph(session_id, graph)
-    return {"topics_added": added, "summary_calls": calls, "embeddings": embedded}
+    return {"topics_added": added, "summary_calls": calls}
 
 
 def _json_slice(text: str) -> str:

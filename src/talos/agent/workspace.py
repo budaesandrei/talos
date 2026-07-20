@@ -22,12 +22,11 @@ IGNORE = {".git", ".venv", "node_modules", "__pycache__", ".talos", "dist", "bui
 
 def _git(args: list[str]) -> str:
     try:
-        # ⚠️ encoding matters: git speaks UTF-8, but text=True alone decodes
-        # with the locale codec (cp1252 on Windows) — a commit message with
-        # “smart quotes” or an em-dash then crashes startup with
-        # UnicodeDecodeError: 'charmap' can't decode byte 0x9d.
         return subprocess.run(
             ["git", *args], capture_output=True, text=True, timeout=10,
+            # git speaks UTF-8; text=True alone decodes with the locale
+            # codec (cp1252 on Windows) and a commit message with smart
+            # quotes crashes startup: charmap can't decode byte 0x9d
             encoding="utf-8", errors="replace",
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):

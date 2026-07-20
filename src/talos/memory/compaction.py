@@ -64,14 +64,22 @@ def _split(messages: list[BaseMessage], keep_recent: int):
 
 async def compact(
     messages: list[BaseMessage],
-    summarize,                 # async (list[BaseMessage]) -> str
+    summarize,                 # async (prior, transcript[, span]) -> str
     keep_recent: int = 6,
 ) -> tuple[list[BaseMessage], bool]:
     """Return (new_messages, did_compact).
 
     ``summarize`` is injected so this module stays LLM-agnostic and
     testable (the runtime passes a real LLM call; tests pass a fake).
+
+    Time-awareness (M58): the time span of the folded turns is passed to
+    ``summarize`` as a third argument when available, so the digest text
+    can naturally mention "these turns spanned 2 days". Older summarize
+    callables that take only two arguments still work — we fall back
+    gracefully via TypeError catching.
     """
+    from talos.agent.time_awareness import format_span, time_span
+
     existing, to_summarize, to_keep = _split(messages, keep_recent)
     if not to_summarize:
         return messages, False
@@ -80,7 +88,12 @@ async def compact(
     transcript = "\n".join(
         f"{_role(m)}: {m.content}" for m in to_summarize if str(m.content).strip()
     )
-    digest = await summarize(prior, transcript)
+    span_str = format_span(time_span(to_summarize))
+    try:
+        digest = await summarize(prior, transcript, span_str)
+    except TypeError:
+        # Two-arg callable — backward compat with pre-M58 callers + tests.
+        digest = await summarize(prior, transcript)
 
     summary = SystemMessage(content=f"{SUMMARY_MARKER}\n{digest.strip()}")
     return [summary, *to_keep], True

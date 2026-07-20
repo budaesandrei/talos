@@ -20,18 +20,18 @@ UX details worth stealing:
   ``↳`` previews — enough to follow along without drowning in output
 - permission prompts pause the spinner, ask, then resume
 - Ctrl-C cancels the current turn, not the whole session
-- Esc stops too: once = graceful (next safe boundary), twice = hard cancel
-- the bottom input line belongs to YOU: agent output always prints above
-  the prompt (prompt_toolkit's patch_stdout), so you can type the next
-  message while the agent is still streaming — kiro/claude-code style
+- so does Esc (Windows, turn-based reader): once = graceful stop at
+  the next safe boundary, twice = hard cancel — see ``_EscWatcher``
 """
 
 import asyncio
 import itertools
 import json
+import os
 import re
 import sys
 import threading
+import time
 
 from langchain_core.messages import (
     AIMessage,
@@ -42,6 +42,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langgraph.errors import GraphRecursionError
+from rich import box
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -78,9 +79,25 @@ from talos.memory.sessions import (
 )
 from talos.agent.thinking import ThinkSplitter
 from talos.tools import get_tools
-from talos.tools.jobs import manager as job_manager
 
 console = Console()
+
+
+def render_user_message(text: str) -> None:
+    """🟦 Echo the user's message in a bordered panel, rendered as markdown
+    so pasted ```code``` blocks and `inline code` look right. The border is
+    the clear separation from the agent's reply below it."""
+    body = Markdown(text) if text.strip() else Text(text)
+    console.print(
+        Panel(
+            body,
+            border_style="#5f87af",
+            box=box.ROUNDED,
+            padding=(0, 1),
+            title="[dim]you[/]",
+            title_align="left",
+        )
+    )
 
 THINKING = itertools.cycle(
     ["🤔 thinking", "🧠 reasoning", "🪄 putting it together", "☕ one moment"]
@@ -90,7 +107,6 @@ TOOL_EMOJI = {
     "read_file": "📖", "write_file": "✍️ ", "edit_file": "✏️ ",
     "list_dir": "📂", "glob_files": "🔍", "grep": "🔎",
     "shell": "🐚", "web_fetch": "🌐", "save_memory": "🧠",
-    "job_status": "📟", "job_kill": "🔪",
 }
 
 
@@ -113,76 +129,120 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _split_ready(buffer: str, markdown: bool) -> tuple[str, str]:
-    """✂️ Split streamed text into (ready-to-print, still-forming).
+class _QueueAdapter:
+    """Lets one-shot prompt code reuse the ``await pump.queue.get()`` API:
+    each ``get()`` simply shows the prompt once and returns the line."""
 
-    In fancy mode we can't use rich.Live: Live repaints by moving the
-    cursor around the bottom of the screen — exactly where prompt_toolkit
-    keeps the user's input line — so the two fight and the cursor ends up
-    stuck on the last streamed character. Instead we print only FINISHED
-    units above the prompt (patch_stdout keeps the input line pinned and
-    editable underneath):
+    def __init__(self, reader):
+        self._reader = reader
 
-    - markdown on: a block, i.e. text up to a blank line that is not
-      inside a ``` code fence — blocks render correctly in isolation
-    - markdown off: whole lines
-    """
-    if not markdown:
-        idx = buffer.rfind("\n")
-        return ("", buffer) if idx < 0 else (buffer[: idx + 1], buffer[idx + 1 :])
-    best = -1
-    pos = buffer.find("\n\n")
-    while pos != -1:
-        fences = len(re.findall(r"^\s{0,3}```", buffer[:pos], re.M))
-        if fences % 2 == 0:  # an odd count would split an open code fence
-            best = pos
-        pos = buffer.find("\n\n", pos + 1)
-    if best < 0:
-        return "", buffer
-    return buffer[:best], buffer[best + 2 :]
+    async def get(self):
+        return await self._reader.get_line()
 
 
 class _PromptPump:
-    """⌨️→📬 prompt_toolkit edition of the stdin pump (real terminals).
+    """⌨️ Fancy line reader — turn-based, NOT pinned.
 
-    Same contract as _StdinPump (lines land in .queue, EOF → None), but
-    the user gets a persistent editable prompt at the bottom with TAB
-    completion for slash commands, while agent output prints above it
-    (prompt_toolkit's patch_stdout does that part).
+    The previous design kept a prompt_toolkit prompt alive for the whole
+    session and printed agent output *through* ``patch_stdout``. That
+    repainted the app on every token (flicker), pinned the cursor at the
+    prompt (no separation), and corrupted scrollback when you scrolled
+    mid-stream (duplicated paragraphs).
+
+    This version runs the prompt only when we actually need a line — between
+    turns, or for an approval/plan question. During streaming there is NO
+    prompt and NO patch_stdout, so tokens go straight to the terminal:
+    clean separation, zero flicker, native scrollback.
     """
 
-    def __init__(self, stats=None, on_escape=None):
-        from talos.ui.tui import StatusState
+    fancy = True
 
-        self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+    def __init__(self, stats=None):
         self.eof = False
-        self.fancy = True
-        self.status_state = StatusState()  # ⚒ rendered in the prompt's toolbar
         self._stats = stats
-        self._on_escape = on_escape       # ⎋ stop-the-turn callback
-        self._task = asyncio.create_task(self._loop())
+        self._session = None
+        self.queue = _QueueAdapter(self)  # compat for await pump.queue.get()
 
-    async def _loop(self) -> None:
-        from talos.ui.tui import build_session
+    def _ensure(self):
+        if self._session is None:
+            from talos.ui.tui import build_session
 
-        session = build_session(
-            stats=self._stats, status=self.status_state, on_escape=self._on_escape
-        )
-        while True:
-            try:
-                line = await session.prompt_async()
-            except EOFError:
-                await self.queue.put(None)
-                return
-            except KeyboardInterrupt:
-                continue  # clear the line, keep the session
-            await self.queue.put(line)
+            self._session = build_session(stats=self._stats)
+        return self._session
+
+    async def get_line(self, prompt_text=None):
+        session = self._ensure()
+        try:
+            if prompt_text is not None:
+                return await session.prompt_async(prompt_text)
+            return await session.prompt_async()
+        except EOFError:           # Ctrl-D → end the session
+            self.eof = True
+            return None
+        except KeyboardInterrupt:  # Ctrl-C at an empty prompt → ignore
+            return ""
 
 
-def make_pump(stats=None, on_escape=None):
-    """Fancy prompt on real terminals; plain thread pump for pipes/tests."""
-    if sys.stdin.isatty() and sys.stdout.isatty():
-        return _PromptPump(stats, on_escape)
+class _EscWatcher:
+    """⎋ Esc-to-stop for the turn-based reader (Windows).
+
+    While a turn streams, no prompt is running and nobody reads the
+    keyboard — so this daemon thread peeks at it. The first key decides:
+    Esc fires the stop callback (press again for a hard cancel); any other
+    key is pushed back for the next prompt's type-ahead and the watcher
+    retires for the rest of the turn. POSIX terminals keep line-buffered
+    type-ahead that raw reads would break, so this is Windows-only —
+    Ctrl-C still cancels everywhere.
+    """
+
+    def __init__(self, loop, on_escape):
+        self._loop = loop
+        self._on_escape = on_escape
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if os.name != "nt" or not sys.stdin.isatty():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.2)  # hand the keyboard back cleanly
+            self._thread = None
+
+    def _watch(self) -> None:
+        import msvcrt
+
+        while not self._stop.is_set():
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch == "\x1b":
+                    self._loop.call_soon_threadsafe(self._on_escape)
+                    continue              # stay armed: 2nd Esc = hard cancel
+                if ch in ("\x00", "\xe0"):
+                    if msvcrt.kbhit():
+                        msvcrt.getwch()   # swallow the arrow/F-key pair
+                    continue
+                try:
+                    msvcrt.ungetwch(ch)   # best effort: return it to type-ahead
+                except Exception:
+                    pass
+                return                    # user is typing — retire this turn
+            time.sleep(0.05)
+
+
+def make_input(stats=None):
+    """Pick the input mechanism:
+    - a real terminal + interjections OFF → the clean turn-based fancy reader
+    - interjections ON, or a pipe/non-tty → the always-on stdin pump
+    """
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    if tty and not settings.interject:
+        return _PromptPump(stats)
     return _StdinPump()
 
 
@@ -278,6 +338,68 @@ class _Status:
             self._status = None
 
 
+def _resolve_resume(resume: str) -> str:
+    """Turn a `-r <arg>` into a concrete session id.
+
+    Resolution order:
+      1. "latest" → most recent session in the global dir
+      2. Exact id match → use as-is
+      3. Otherwise → semantic search over the sessions KB; if the top hit
+         scores well enough, auto-resume; else show candidates and raise
+
+    Raises ``FileNotFoundError`` when nothing works.
+    """
+    from pathlib import Path
+    from talos.memory.sessions import latest_session_id, sessions_dir
+
+    if resume == "latest":
+        sid = latest_session_id()
+        if sid is None:
+            raise FileNotFoundError("no sessions to resume")
+        return sid
+
+    # 2) Exact id?
+    if (sessions_dir() / f"{resume}.json").is_file():
+        return resume
+
+    # 3) Natural-language fuzzy resume (M61). Best-effort; if anything in
+    # the KB layer is missing or the embedder fails to load, give a clear
+    # error pointing at the literal id alternative.
+    try:
+        from talos.memory import sessions as _sm
+        from talos.memory import sessions_kb as _kb
+        kb = _kb.open_sessions_kb()
+        if kb.count() == 0:
+            raise FileNotFoundError(
+                f"no session named {resume!r} and the search index is empty. "
+                "Try `talos sessions reindex` first, or `talos sessions` to list IDs."
+            )
+        hits = _kb.search_sessions(query=resume, k=5, kb=kb)
+        rolled = _kb.aggregate_to_sessions(hits)
+        if not rolled:
+            raise FileNotFoundError(f"no session matched {resume!r}")
+        best = rolled[0]
+        # Print the candidates so the user sees what was matched
+        from rich.console import Console as _C
+        _console = _C()
+        _console.print(f"[dim]🔍 fuzzy resume — matched {len(rolled)} candidate(s) for {resume!r}:[/]")
+        for i, r in enumerate(rolled[:3], 1):
+            meta = _sm.get_session_meta(r["session_id"]) or {}
+            title = meta.get("title") or "[dim]…[/]"
+            marker = "[green]→[/]" if i == 1 else " "
+            _console.print(
+                f"  {marker} [cyan]{r['session_id']}[/] · {title} "
+                f"[dim](score {r['score']:.2f})[/]"
+            )
+        return best["session_id"]
+    except FileNotFoundError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise FileNotFoundError(
+            f"no session named {resume!r} (fuzzy resume failed: {exc})"
+        )
+
+
 class Runtime:
     """One conversation: a compiled graph + the message history."""
 
@@ -293,24 +415,23 @@ class Runtime:
         self.model_name = model or settings.model
         self._extra_tools = list(extra_tools or [])
         self.stop_flag = asyncio.Event()        # 🛑 graceful-stop signal
-        self._turn_task: "asyncio.Task | None" = None  # ⎋ Esc targets this
         self.inbox: list[str] = []              # 📨 /btw-style queued notes
-        # 📟 the callback door: background-job completions land here, never
-        # in the prompt — so they can't clobber a half-typed sentence.
-        self.job_events: "asyncio.Queue" = asyncio.Queue()
-        job_manager.set_notifier(self.job_events.put_nowait)
         self._activity: list[str] = []          # 🗣️ narrator's source material
         self._line_request: asyncio.Future | None = None  # approval waiting?
+        self._reader = None  # one-shot reader, set by the repl in fancy mode
+        self._turn_task = None      # ⎋ Esc targets this
+        self._esc_watcher = None    # armed by the repl while a turn runs
         self._gate = PermissionGate(
             approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
         )
         self._rebuild_graph()
         # 💾 Either continue an old session or start a new one.
+        # `resume` is one of: "latest", an exact session id, or a natural-
+        # language query (M61). The fuzzy path runs a vector search and
+        # auto-resumes the best match.
         if resume:
-            session_id = latest_session_id() if resume == "latest" else resume
-            if session_id is None:
-                raise FileNotFoundError("no sessions to resume")
+            session_id = _resolve_resume(resume)
             self.session_id = session_id
             self.messages: list[BaseMessage] = load_session(session_id)
         else:
@@ -365,7 +486,8 @@ class Runtime:
     def _usage_suffix(self) -> str:
         """The 'how much have I spent' tail on the spinner line."""
         line = self.stats_line()
-        return f" · {line}" if line else ""
+        hint = " · Esc stops" if self._esc_watcher is not None else ""
+        return (f" · {line}" if line else "") + hint
 
     def stats_line(self) -> str:
         """📊 right-edge prompt stats: context fuel · session tokens · $."""
@@ -382,13 +504,21 @@ class Runtime:
             parts.append(text)
         return "  ·  ".join(parts)
 
-    async def _summarize(self, prior: str, transcript: str) -> str:
-        """One metered LLM call that produces the compaction digest."""
+    async def _summarize(self, prior: str, transcript: str,
+                          span: str = "") -> str:
+        """One metered LLM call that produces the compaction digest.
+
+        ``span`` is a human-readable time-range string from
+        ``time_awareness.format_span`` (e.g., "(2026-06-18 09:00 → ...,
+        spanning 2d 4h)"); we drop it into the user message so the digest
+        naturally mentions it. Empty string when no stamped messages exist."""
         from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
 
+        span_line = f"Time span of these turns: {span}\n\n" if span else ""
         msg = await build_llm(self.model_name).ainvoke([
             SM(content=SUMMARY_PROMPT),
             HM(content=(f"Earlier summary:\n{prior}\n\n" if prior else "")
+               + span_line
                + f"New turns to fold in:\n{transcript}"),
         ])
         self._track_usage(msg)
@@ -417,20 +547,6 @@ class Runtime:
         self._track_usage(msg)
         return get_message_text(msg)
 
-    def _embed_fn(self):
-        """🧭 async batch-embed callable for graph memory, or None when no
-        TALOS_EMBED_MODEL is configured (recall then stays keyword-based)."""
-        from talos.agent.llm import build_embedder
-
-        embedder = build_embedder()
-        if embedder is None:
-            return None
-
-        async def embed(texts: list[str]) -> list[list[float]]:
-            return await embedder.aembed_documents(texts)
-
-        return embed
-
     async def maybe_compact(self, force: bool = False) -> bool:
         """🗜️ Fold old turns into a summary when context fills up.
         Returns True if a compaction happened."""
@@ -452,15 +568,12 @@ class Runtime:
 
                 folded = next((str(m.content) for m in new_messages), "")
                 stats = await ingest_async(
-                    self.session_id, folded, self._extract_topics,
-                    self._summ_community, embed=self._embed_fn(),
+                    self.session_id, folded, self._extract_topics, self._summ_community
                 )
                 if stats["topics_added"]:
-                    vec = (f", {stats['embeddings']} embeddings"
-                           if stats.get("embeddings") else "")
                     console.print(
                         f"[dim]🕸️ memory: +{stats['topics_added']} topics, "
-                        f"{stats['summary_calls']} community summaries{vec}[/]"
+                        f"{stats['summary_calls']} community summaries[/]"
                     )
             except Exception:
                 pass
@@ -498,13 +611,25 @@ class Runtime:
                 title_align="left",
             )
         )
-        console.print("[yellow]allow? \\[y]es · \\[n]o · \\[a]lways ›[/] ", end="")
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._line_request = fut
-        try:
-            answer = await fut
-        finally:
-            self._line_request = None
+        console.print(r"[yellow]allow? \[y]es · \[n]o · \[a]lways ›[/] ", end="")
+        if self._reader is not None:
+            # 🆕 turn-based fancy mode: read the answer with a one-shot prompt
+            # (pause the Esc watcher so two readers never race for keys)
+            if self._esc_watcher is not None:
+                self._esc_watcher.stop()
+            try:
+                answer = await self._reader.get_line("") or ""
+            finally:
+                if self._esc_watcher is not None:
+                    self._esc_watcher.start()
+        else:
+            # interject mode: park a Future the interjection loop fulfils
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            self._line_request = fut
+            try:
+                answer = await fut
+            finally:
+                self._line_request = None
         self.status.set(f"⚙️  running {tool_name}…")
         return answer
 
@@ -523,21 +648,40 @@ class Runtime:
             content = build_content(user_input, self.model_name)
         except Exception:
             content = user_input
-        self.messages.append(HumanMessage(content=content))
+
+        # ⏱ Time-awareness: if there's a real gap since the last stamped
+        # message, inject a brief gap-notice SystemMessage so the model
+        # knows the session is being resumed rather than continued.
+        # Also print a dim one-line notice for the user (symmetric awareness).
+        from datetime import datetime as _dt
+        from talos.agent.time_awareness import detect_gap, format_gap, gap_notice, stamp
+
+        now = _dt.now()
+        gap = detect_gap(self.messages, now=now,
+                         threshold_minutes=settings.gap_minutes)
+        if gap is not None:
+            notice = gap_notice(gap, when=now)
+            self.messages.append(notice)
+            console.print(f"[dim]⏱ {format_gap(gap)} gap noted[/]")
+
+        human_msg = HumanMessage(content=content)
+        stamp(human_msg, when=now)
+        self.messages.append(human_msg)
         collected: list[BaseMessage] = []
         # 🎨 streaming state: with markdown on, we re-render the growing
         # buffer through rich.Live (live markdown!); with it off, we print
         # raw tokens. Either way the spinner dies on the first token.
-        buffer = ""
-        live: Live | None = None
-        prefix_printed = False
+        # 🎨 APPEND-ONLY streaming: tokens print straight to the terminal,
+        # never repainted. rich.Live repainting the growing buffer was the
+        # cause of the flicker + the overflow-duplication when scrolling. We
+        # stream plain, then re-render as markdown only if the answer still
+        # fits on screen (so the cursor-up clear is safe).
+        buffer = ""               # answer text so far
+        answer_rows = 0           # terminal rows the answer has occupied
+        body_printed = False
         reasoning_open = False
         header_printed = False
-        # 🪟 fancy mode = the prompt_toolkit prompt owns the bottom of the
-        # screen (status sink attached). Streamed output must then print
-        # ABOVE the prompt in finished units — never via rich.Live, which
-        # would drag the cursor away from the user's input line.
-        fancy = self.status.sink is not None
+        self._body_shown = False  # did any answer text reach the screen?
 
         def ensure_header() -> None:
             nonlocal header_printed
@@ -545,27 +689,31 @@ class Runtime:
                 console.print(self._header(), highlight=False)
                 header_printed = True
 
-        def flush_fancy(text_block: str) -> None:
-            if not text_block.strip():
-                return
-            ensure_header()
-            if settings.markdown:
-                console.print(Markdown(text_block))
-            else:
-                console.print(text_block.rstrip("\n"), markup=False, highlight=False)
+        def emit(text: str) -> None:
+            nonlocal answer_rows
+            print(text, end="", flush=True)
+            width = max(console.width, 1)
+            for i, line in enumerate(text.split("\n")):
+                if i:
+                    answer_rows += 1
+                answer_rows += len(line) // width
 
         def close_stream() -> None:
-            nonlocal live, buffer, prefix_printed, reasoning_open
-            if live is not None:
-                live.stop()
-                live = None
-            if fancy:
-                flush_fancy(buffer)  # whatever block was still forming
-            if prefix_printed or reasoning_open:
+            nonlocal buffer, body_printed, reasoning_open, answer_rows
+            if reasoning_open:
+                print()
+                reasoning_open = False
+            if body_printed:
                 print()  # finish the streamed line
+                if (settings.markdown and buffer.strip()
+                        and answer_rows + 1 < console.height):
+                    # short answer → re-render it nicely (safe cursor-up clear)
+                    sys.stdout.write(f"\x1b[{answer_rows + 1}A\x1b[J")
+                    sys.stdout.flush()
+                    console.print(Markdown(buffer))
             buffer = ""
-            prefix_printed = False
-            reasoning_open = False
+            body_printed = False
+            answer_rows = 0
 
         self.status.set(f"{next(THINKING)}…{self._usage_suffix()}")
         try:
@@ -605,37 +753,21 @@ class Runtime:
                         if reasoning_open:
                             print()  # close the reasoning block
                             reasoning_open = False
-                        if fancy:
-                            # ⌨️ your input line stays put at the bottom;
-                            # finished blocks/lines print above it, and the
-                            # toolbar spinner shows the answer is flowing
-                            self.status.set("✍️ writing…")
-                            buffer += text
-                            ready, buffer = _split_ready(buffer, settings.markdown)
-                            flush_fancy(ready)
-                        elif settings.markdown:
-                            self.status.stop()
-                            buffer += text
-                            if live is None:
-                                ensure_header()
-                                live = Live(
-                                    console=console,
-                                    refresh_per_second=8,
-                                    vertical_overflow="visible",
-                                )
-                                live.start()
-                            live.update(Markdown(buffer))
-                        else:
-                            self.status.stop()
-                            if not prefix_printed:
-                                ensure_header()
-                                prefix_printed = True
-                            print(text, end="", flush=True)
+                        self.status.stop()
+                        ensure_header()
+                        body_printed = True
+                        self._body_shown = True
+                        buffer += text
+                        emit(text)  # append-only, flicker-free
 
                 elif mode == "updates":
                     close_stream()  # tool lines must not fight the Live region
                     for node, update in (payload or {}).items():
                         for msg in (update or {}).get("messages", []):
+                            # ⏱ stamp every message as it materializes — best
+                            # approximation of "when was this created" we have
+                            from talos.agent.time_awareness import stamp as _stamp
+                            _stamp(msg)
                             collected.append(msg)
                             self._track_usage(msg)
                             self._measure_context(msg)
@@ -687,6 +819,17 @@ class Runtime:
             if isinstance(msg, AIMessage):
                 final = get_message_text(msg)
                 break
+
+        # 🛟 fallback: some providers don't stream tokens (the answer arrives
+        # whole, via 'updates'). If nothing reached the screen, render it now
+        # so the reply is never invisible.
+        if final.strip() and not self._body_shown:
+            console.print(self._header(), highlight=False)
+            from talos.agent.thinking import ThinkSplitter
+
+            shown = ThinkSplitter.strip(final) if "<thinking>" in final.lower() else final
+            console.print(Markdown(shown) if settings.markdown else shown,
+                          highlight=False)
 
         # 🧜 mermaid can't render in a terminal — offer the browser instead.
         self.last_mermaid = extract_mermaid(final)
@@ -817,7 +960,7 @@ class Runtime:
         except Exception:
             pass  # cosmetic feature — never disturb the session
 
-    # ── ⎋ Esc from the prompt: stop the busy turn ───────────────────────
+    # ── ⎋ Esc pressed while a turn runs ─────────────────────────────────
     def request_stop(self) -> None:
         """First press = graceful (the graph exits at the next safe
         boundary via stop_flag); second press = hard cancel of the task.
@@ -1096,6 +1239,63 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     console.print("[green]🔄 handed off to /plan — the cycle continues[/]")
 
 
+def reprint_history(rt: "Runtime") -> int:
+    """🖨️ Render a resumed session's messages to the terminal so the user
+    can scroll up and see what was previously discussed (M62).
+
+    Same look as live streaming — user prefix in golden, agent header,
+    tool-call dim one-liners — just rendered all at once before the
+    prompt appears. Gap-notice SystemMessages (M58) are filtered out;
+    they were UI hints, not conversation. Returns the count of
+    visible messages rendered (for the closing separator)."""
+    from talos.agent.time_awareness import is_gap_notice
+    from talos.memory.compaction import is_summary
+
+    visible: list[BaseMessage] = []
+    for m in rt.messages:
+        if is_gap_notice(m):
+            continue
+        if isinstance(m, SystemMessage) and not is_summary(m):
+            continue
+        visible.append(m)
+    if not visible:
+        return 0
+
+    console.print(f"\n[dim]─── resumed ({len(visible)} message(s)) "
+                  + "─" * 40 + "[/]")
+    for m in visible:
+        if isinstance(m, HumanMessage):
+            text = get_message_text(m)
+            # match the live `→ <text>` prefix style from the REPL
+            console.print(f"[bold #ffd75f]→[/] {text}", highlight=False)
+        elif isinstance(m, AIMessage):
+            console.print(rt._header(), highlight=False)
+            text = get_message_text(m)
+            if text.strip():
+                if settings.markdown:
+                    console.print(Markdown(text))
+                else:
+                    console.print(text, highlight=False, markup=False)
+            for call in (m.tool_calls or []):
+                emoji = TOOL_EMOJI.get(call["name"], "🔧")
+                console.print(
+                    f"[dim]{emoji} {call['name']}({_args_preview(call['args'])})[/]"
+                )
+        elif isinstance(m, ToolMessage):
+            text = get_message_text(m).strip()
+            first = text.splitlines()[0] if text else ""
+            extra = ""
+            line_count = len(text.splitlines())
+            if line_count > 1:
+                extra = f" (+{line_count - 1} lines)"
+            console.print(f"[dim]   ↳ ✓ {first[:120]}{extra}[/]")
+        elif isinstance(m, SystemMessage):
+            # The compaction summary — render as a folded marker
+            console.print(f"[dim italic]📓 (compacted summary of older turns)[/]")
+    console.print(f"[dim]" + "─" * 60 + "[/]\n")
+    return len(visible)
+
+
 async def run_once(prompt: str, model: str | None = None, yolo: bool = False) -> None:
     """⚡ One-shot mode: single turn, then exit (good for scripts/pipes).
 
@@ -1103,21 +1303,7 @@ async def run_once(prompt: str, model: str | None = None, yolo: bool = False) ->
     denied unless ``--yolo`` is passed.
     """
     extra = await _gather_mcp_tools()
-    rt = Runtime(model, yolo=yolo, interactive=False, extra_tools=extra)
-    await rt.turn(prompt)
-    # ⚡ one-shot semantics: don't orphan, don't kill work mid-flight —
-    # wait (bounded) for stragglers, then reap whatever is left.
-    for job in job_manager.running():
-        console.print(f"[dim]📟 waiting for job #{job.id} (pid {job.pid})…[/]")
-        try:
-            await asyncio.wait_for(job.proc.wait(), timeout=300)
-        except asyncio.TimeoutError:
-            console.print(f"[yellow]📟 job #{job.id} still running after 300s[/]")
-    killed = await job_manager.shutdown()
-    if killed:
-        console.print(
-            "[dim]📟 reaped: " + ", ".join(f"job #{j.id}" for j in killed) + "[/]"
-        )
+    await Runtime(model, yolo=yolo, interactive=False, extra_tools=extra).turn(prompt)
 
 
 async def repl(
@@ -1137,6 +1323,12 @@ async def repl(
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
 
     # 🕹️ banner first, before any prompt is drawn.
+    # ⏱ if resuming, compute the gap since the most recent stamped message
+    last_active_str = ""
+    if resume and rt.messages:
+        from talos.agent.time_awareness import format_last_active
+        last_active_str = format_last_active(rt.messages) or ""
+
     print_banner(
         console,
         model=rt.model_name,
@@ -1144,13 +1336,22 @@ async def repl(
         yolo=yolo or settings.yolo,
         resumed=len(rt.messages) if resume else 0,
         title=rt.title,
+        last_active=last_active_str,
     )
 
-    # 📟 a previous session that crashed may have left processes behind
-    for e in job_manager.leftovers():
+    # 🖨️ M62: reprint prior turns so the user can scroll up and see
+    # what was previously discussed (kiro-style resume UX).
+    if resume and rt.messages:
+        reprint_history(rt)
+
+    # ⚠️ no credentials configured → the model name shown is just the
+    # default; a real request would 401. Tell the user plainly rather than
+    # letting them think gpt-4o-mini is wired up.
+    if not settings.api_key:
         console.print(
-            f"[yellow]📟 a previous session may have left pid {e['pid']} "
-            f"running (`{str(e.get('command', ''))[:50]}`) — check it manually[/]"
+            "[yellow]⚠️  no API key configured[/] — set TALOS_API_KEY (+ "
+            "TALOS_BASE_URL / TALOS_MODEL) in .env or your environment. "
+            f"[dim]showing the default model '{rt.model_name}'.[/]"
         )
 
     # 🔥 warm /models in the background: one round trip gives the picker
@@ -1159,28 +1360,47 @@ async def repl(
 
     asyncio.get_running_loop().run_in_executor(None, prime_models_cache)
 
-    # sole stdin reader + 📊 rprompt + ⎋ Esc-to-stop
-    pump = make_pump(stats=rt.stats_line, on_escape=rt.request_stop)
-    if pump.fancy:
-        rt.status.sink = pump.status_state  # ⚒ status renders in the toolbar
-    if pump.fancy:
-        # output prints ABOVE the persistent bottom prompt
-        from prompt_toolkit.patch_stdout import patch_stdout
-
-        stdout_ctx = patch_stdout(raw=True)
-        stdout_ctx.__enter__()
+    pump = make_input(stats=rt.stats_line)
+    fancy = getattr(pump, "fancy", False)
+    if fancy:
+        # one-shot reader handles approval/plan/evolve prompts mid-turn
+        rt._reader = pump
     else:
-        stdout_ctx = None
+        # plain pump: the ⚒ status renders in its pinned toolbar
+        rt.status.sink = getattr(pump, "status_state", None)
 
     async def run_turn(text: str) -> None:
-        """One turn, listening for interjections the whole time."""
+        render_user_message(text)  # 🟦 bordered echo, then the agent replies
+        if fancy:
+            # 🆕 turn-based: no pinned prompt, no patch_stdout — tokens stream
+            # straight to the terminal (clean separation, no flicker, real
+            # scrollback). Ctrl-C interrupts just this turn; on Windows a
+            # bare Esc does too (once = graceful, twice = hard cancel).
+            turn_task = asyncio.create_task(rt.turn(text))
+            rt._turn_task = turn_task
+            watcher = _EscWatcher(asyncio.get_running_loop(), rt.request_stop)
+            rt._esc_watcher = watcher
+            watcher.start()
+            try:
+                await turn_task
+            except asyncio.CancelledError:
+                rt.status.stop()
+                console.print("\n[yellow]⛔ stopped — session saved[/]")
+            except KeyboardInterrupt:
+                turn_task.cancel()
+                rt.status.stop()
+                console.print("\n[yellow]⏹  turn interrupted[/]")
+            finally:
+                watcher.stop()
+                rt._esc_watcher = None
+                rt._turn_task = None
+            return
+        # ⌨️ interject mode: watch stdin while the turn streams
         turn_task = asyncio.create_task(rt.turn(text))
-        rt._turn_task = turn_task  # ⎋ lets the Esc key find the busy turn
+        rt._turn_task = turn_task
         try:
             while not turn_task.done():
                 if pump.eof:
-                    # stdin is closed (piped input): nobody can interject —
-                    # just let the turn finish.
                     await turn_task
                     break
                 getter = asyncio.create_task(pump.queue.get())
@@ -1190,7 +1410,7 @@ async def repl(
                 if getter.done():
                     line = getter.result()
                     if line is None:
-                        pump.eof = True  # remember; don't kill the turn
+                        pump.eof = True
                     elif line.strip():
                         await rt.interject(line.strip(), turn_task)
                 else:
@@ -1222,20 +1442,55 @@ async def repl(
         if action == "evolve":
             await run_evolve(rt, pump, payload)
             return True
+        if action in ("shell", "shell-silent"):
+            from talos.tools.shell_escape import run_shell_escape
+
+            silent = action == "shell-silent"
+            console.print(
+                f"[dim #c97f2e]🐚 $ {payload}"
+                + ("  [silent][/]" if silent else "[/]")
+            )
+            try:
+                result = await asyncio.to_thread(
+                    run_shell_escape, payload, silent=silent,
+                )
+            except Exception as exc:  # noqa: BLE001 — show the user, never crash REPL
+                console.print(f"[red]💥 {type(exc).__name__}: {exc}[/]")
+                return True
+            if result.missing_handles:
+                console.print(
+                    f"[yellow]⚠️ unresolved vault placeholders: "
+                    f"{', '.join(result.missing_handles)} — left as-is[/]"
+                )
+            if result.output:
+                console.print(result.output, highlight=False, markup=False, end="")
+                if not result.output.endswith("\n"):
+                    console.print()
+            tag = "✅" if result.exit_code == 0 else f"❌ exit {result.exit_code}"
+            mode = "silent" if silent else "shared with agent"
+            console.print(f"[dim]{tag}  ·  {mode}[/]")
+            if not silent and result.history_message is not None:
+                rt.messages.append(result.history_message)
+                # Persist immediately so an interjection or crash doesn't
+                # lose the shell context the agent just gained.
+                try:
+                    from talos.memory.sessions import save_session
+                    save_session(rt.session_id, rt.messages)
+                except Exception:
+                    pass
+            return True
         if action == "prompt":
             console.print("[dim]⌨️  expanded custom command[/]")
         await run_turn(payload)
         return True
 
     if initial_prompt:
-        console.print(f"[bold #ffd75f]→[/] {initial_prompt}")
         await run_turn(initial_prompt)
 
     while True:
         # 📨 first, anything the user queued while the agent was busy
         if rt.inbox:
             note = rt.inbox.pop(0)
-            console.print(f"[bold #ffd75f]→[/] [dim](queued)[/] {note}")
             if not await handle_line(note):
                 break
             if rt._pending_verify:  # 🔍 the construct turn just finished
@@ -1243,50 +1498,18 @@ async def repl(
                 await rt.verify_plan(plan)
             continue
 
-        # 📟 the callback door: a background job finished while we were
-        # idle or busy — report it in a full agent turn. Output prints
-        # ABOVE the prompt, so a half-typed sentence survives untouched.
-        if not rt.job_events.empty():
-            job = rt.job_events.get_nowait()
-            console.print(
-                f"[dim]📟 job #{job.id} finished (exit {job.exit_code}) — reporting…[/]"
-            )
-            await run_turn(
-                f"[system note — this is not the user speaking] Background job "
-                f"#{job.id} (pid {job.pid}, `{job.command[:80]}`) finished with "
-                f"exit code {job.exit_code} after {job.elapsed():.0f}s. "
-                f"Log file: {job.log_path}. Inspect it if useful, then give the "
-                "user a short update on the outcome. If they were in the middle "
-                "of saying something, invite them to continue their thought."
-            )
-            continue
-
         if pump.eof:
             console.print("[dim]bye 👋[/]")
             break
 
-        if not pump.fancy:  # the fancy pump draws its own prompt
-            console.print("[bold #ffd75f]→[/] ", end="")
-        # ⏳ the idle wait races the prompt against the job-events door, so
-        # a completion wakes the loop even when the user isn't typing.
-        getter = asyncio.create_task(pump.queue.get())
-        door = asyncio.create_task(rt.job_events.get())
-        try:
-            await asyncio.wait({getter, door}, return_when=asyncio.FIRST_COMPLETED)
-        except KeyboardInterrupt:
-            getter.cancel()
-            door.cancel()
-            line = None
+        if fancy:
+            line = await pump.get_line()
         else:
-            if door.done():  # requeue: handled at the top of the loop
-                rt.job_events.put_nowait(door.result())
-            else:
-                door.cancel()
-            if getter.done():
-                line = getter.result()
-            else:
-                getter.cancel()
-                continue
+            console.print("[dim]▏ type below[/]")
+            try:
+                line = await pump.queue.get()
+            except KeyboardInterrupt:
+                line = None
         if line is None:
             console.print("\n[dim]bye 👋[/]")
             break
@@ -1299,17 +1522,6 @@ async def repl(
             console.print(f"[dim]📋 pasted {len(stripped):,} chars[/]")
         if not await handle_line(stripped):
             break
-
-    # 📟 no orphans: reap anything still running before we go
-    killed = await job_manager.shutdown()
-    if killed:
-        console.print(
-            "[dim]📟 reaped background job(s): "
-            + ", ".join(f"#{j.id} (pid {j.pid})" for j in killed) + "[/]"
-        )
-
-    if stdout_ctx is not None:
-        stdout_ctx.__exit__(None, None, None)
 
 async def _do_rewind(rt: Runtime, pump) -> None:
     """⏪ Interactive checkpoint restore with a scope choice."""
@@ -1474,3 +1686,109 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
             console.print(f"[dim]🧜 opened {path}[/]")
         else:
             console.print("[dim]no mermaid blocks in the last reply[/]")
+    elif name == "/knowledge":
+        # 🗂 In-chat listing of user-set knowledge bases. Management
+        # (add/remove/update) stays in the CLI (`talos knowledge ...`) for
+        # write-action visibility.
+        from talos.lifecycle.knowledge_cli import list_user_kbs
+
+        metas = list_user_kbs()
+        if not metas:
+            console.print(
+                "[dim]🗂 no user knowledge bases yet — try: "
+                "talos knowledge add ~/path/to/docs[/]"
+            )
+            return
+        table = Table(title=f"🗂 user knowledge bases ({len(metas)})",
+                      show_header=True, header_style="dim")
+        table.add_column("id", style="cyan", no_wrap=True)
+        table.add_column("name")
+        table.add_column("kind", style="dim")
+        table.add_column("embedder", style="dim")
+        for m in metas:
+            table.add_row(m.kb_id, m.name, m.kind, m.embedder_name)
+        console.print(table)
+    elif name == "/vault":
+        # 🔐 In-chat vault view + redaction toggle. List handles like
+        # `talos vault list`, plus subcommands for the session-scoped
+        # scrubber:  /vault unredact   /vault redact
+        from talos.infra.vault import RevealedSecrets, all_handles
+
+        # The slash command parser stashes everything after the name in
+        # `payload` only for /plan and /evolve; for builtins we get just
+        # the name, so subcommands aren't reachable from `_run_builtin`.
+        # The dispatcher routes "/vault unredact" → action="unknown",
+        # so we expose toggles by listening for an `args` attribute we
+        # tack on via dispatch upgrade in a follow-up; for now, /vault
+        # lists handles and prints the current scrub state — the toggle
+        # lives in `talos vault` (CLI) and an in-REPL form is M57 polish.
+        handles = all_handles()
+        if not handles:
+            console.print(
+                "[dim]🔐 no vault entries yet — try: "
+                "talos vault add <handle> --description '...'[/]"
+            )
+            return
+        table = Table(title=f"🔐 vault handles ({len(handles)})",
+                      show_header=True, header_style="dim")
+        table.add_column("handle", style="cyan")
+        table.add_column("kind", justify="center")
+        table.add_column("scope")
+        table.add_column("description / value", style="dim")
+        icons_k = {"secret": "🔒", "value": "📝"}
+        icons_s = {"session": "🟡", "project": "🔵", "global": "🟢"}
+        for h in handles:
+            if h.kind == "secret":
+                body = h.description or "(no description)"
+            else:
+                body = (h.body or "")[:80]
+                if h.description:
+                    body += f"  ({h.description})"
+            table.add_row(
+                h.handle,
+                f"{icons_k.get(h.kind, '·')} {h.kind}",
+                f"{icons_s.get(h.scope, '·')} {h.scope}",
+                body,
+            )
+        console.print(table)
+        state = "ON" if RevealedSecrets.is_enabled() else "OFF"
+        n = RevealedSecrets.revealed_count()
+        console.print(
+            f"[dim]🔐 scrubber: {state}  ·  {n} secret value(s) revealed this session[/]"
+        )
+    elif name == "/runs":
+        # 📬 List recent scheduled-task runs and mark them read. The
+        # daemon writes runs to .talos/schedules/<id>/runs/; this is the
+        # in-chat way to see what fired while you were away.
+        from talos.lifecycle.scheduling import all_runs, mark_all_read
+
+        runs = all_runs(limit_per_schedule=10)
+        if not runs:
+            console.print("[dim]📬 no scheduled runs yet — "
+                          "try: talos schedule add 'do X' --when 'every morning at 9'[/]")
+            return
+        table = Table(title=f"📬 scheduled runs ({len(runs)})", show_header=True,
+                      header_style="dim")
+        table.add_column("when", style="cyan", no_wrap=True)
+        table.add_column("schedule", style="magenta")
+        table.add_column("✓", justify="center")
+        table.add_column("dur", justify="right")
+        table.add_column("response", style="dim")
+        icons = {"ok": "[green]✅[/]", "error": "[red]💥[/]",
+                 "skipped": "[yellow]⏭[/]"}
+        for r in runs[:25]:
+            resp = (r.get("response") or "").splitlines()
+            head = (resp[0] if resp else "")[:80]
+            dur = r.get("duration_s")
+            unread_mark = "" if r.get("read") else " [bold #ffd75f]•[/]"
+            table.add_row(
+                r.get("started_at", "?") + unread_mark,
+                r.get("schedule_id", "?"),
+                icons.get(r.get("status"), "·"),
+                f"{dur:.1f}s" if dur is not None else "·",
+                head,
+            )
+        console.print(table)
+        flipped = mark_all_read()
+        if flipped:
+            console.print(f"[dim]📬 marked {flipped} run(s) read[/]")
