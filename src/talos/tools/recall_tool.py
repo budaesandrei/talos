@@ -21,5 +21,16 @@ def recall_memory(query: str) -> str:
     if _SESSION_ID is None:
         return "no active session"
     graph = load_graph(_SESSION_ID)
-    hit = graph.recall(query)
+    # 🧭 embed the query when an embed model is configured → cosine recall;
+    # any failure (endpoint down, no model) falls back to keyword recall.
+    query_vec = None
+    try:
+        from talos.agent.llm import build_embedder
+
+        embedder = build_embedder()
+        if embedder is not None:
+            query_vec = embedder.embed_query(query)
+    except Exception:
+        pass
+    hit = graph.recall(query, query_vec=query_vec)
     return hit or "nothing relevant found in long-term memory"

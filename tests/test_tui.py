@@ -1,6 +1,6 @@
 """Tests for the inline command menu (M28)."""
 
-from talos.ui.tui import MENU_ROWS, CommandMenu
+from talos.tui import MENU_ROWS, CommandMenu
 
 
 def test_matches_only_on_slash_prefix():
@@ -40,7 +40,7 @@ def test_selection_wraps():
 
 
 def test_status_state_renders_spinner_frame():
-    from talos.ui.tui import SPINNER_FRAMES, StatusState
+    from talos.tui import SPINNER_FRAMES, StatusState
 
     s = StatusState()
     assert s.render() == ""           # idle → toolbar stays empty

@@ -1,6 +1,6 @@
 # 05 · 🧠 Context layers — rules, memory, sessions
 
-> Files: `agent/context.py`, `memory.py`, `memory/sessions.py` · Milestone: M8 · Next: [06 — commands & skills](06-commands-and-skills.md)
+> Files: `context.py`, `memory.py`, `sessions.py` · Milestone: M8 · Next: [06 — commands & skills](06-commands-and-skills.md)
 
 ## The layered system prompt
 

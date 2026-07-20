@@ -1,6 +1,6 @@
 """Tests for environment detection (M21)."""
 
-from talos.infra import environment
+from talos import environment
 
 
 def test_shell_detection_respects_override(monkeypatch):

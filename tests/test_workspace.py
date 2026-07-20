@@ -1,6 +1,6 @@
 """Tests for workspace awareness (M43)."""
 
-from talos.agent import workspace
+from talos import workspace
 
 
 def test_snapshot_includes_tree_and_readme(tmp_path, monkeypatch):
@@ -27,7 +27,7 @@ def test_snapshot_ignores_noise(tmp_path, monkeypatch):
 def test_snapshot_in_system_prompt(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "README.md").write_text("# MyApp", encoding="utf-8")
-    from talos.agent.context import build_system_prompt
+    from talos.context import build_system_prompt
 
     prompt = build_system_prompt()
     assert "Workspace" in prompt and "MyApp" in prompt

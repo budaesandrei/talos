@@ -1,7 +1,7 @@
 """Tests for /plan (M24)."""
 
-from talos.ui.commands import dispatch
-from talos.lifecycle.planning import READY_MARKER, construct_prompt, is_ready, save_plan
+from talos.commands import dispatch
+from talos.planning import READY_MARKER, construct_prompt, is_ready, save_plan
 
 
 def test_dispatch_routes_plan_with_args():

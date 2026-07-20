@@ -2,7 +2,7 @@
 
 from langchain_core.messages import AIMessage
 
-from talos.integrations.agents import agents_summary, discover_agents
+from talos.agents import agents_summary, discover_agents
 from talos.tools import task_tool
 
 from .fakes import FakeToolCallingModel

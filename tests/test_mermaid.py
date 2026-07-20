@@ -1,6 +1,6 @@
 """Tests for markdown/mermaid TUI support (M16)."""
 
-from talos.ui.mermaid import build_html, extract_mermaid
+from talos.mermaid import build_html, extract_mermaid
 
 
 def test_extracts_fenced_mermaid_blocks():

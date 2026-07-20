@@ -1,6 +1,6 @@
 # 11 · 🗺️ Plan mode (AI-DLC)
 
-> File: `lifecycle/planning.py` + `run_plan()` in `agent/runtime.py` · Milestone: M24 · Next: [12 — terminal UI](12-terminal-ui.md)
+> File: `planning.py` + `run_plan()` in `runtime/runner.py` · Milestone: M24 · Next: [12 — terminal UI](12-terminal-ui.md)
 
 AWS's **AI-DLC** (AI-Driven Development Lifecycle) reframes agent work: the
 AI *drives* — planning, asking, proposing — and the human *approves at

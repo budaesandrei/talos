@@ -2,7 +2,7 @@
 
 import json
 
-from talos.memory.graph_memory import MemoryGraph, ingest_async, load_graph, save_graph
+from talos.graph_memory import MemoryGraph, ingest_async, load_graph, save_graph
 
 
 def test_communities_and_dirty_tracking():
@@ -70,3 +70,68 @@ async def test_ingest_async_parses_llm_json(tmp_path, monkeypatch):
     assert stats["topics_added"] == 2
     g = load_graph("s2")
     assert "auth" in g.topics and ("auth", "jwt") in g.edges or ("jwt", "auth") in g.edges
+
+
+# ── 🧭 vector recall ─────────────────────────────────────────────────────
+
+def _fake_vec(text: str) -> list[float]:
+    """2-d toy embedding: axis 0 = money-ish, axis 1 = graph-ish."""
+    t = text.lower()
+    money = sum(t.count(w) for w in ("pricing", "cost", "token", "budget"))
+    graphy = sum(t.count(w) for w in ("langgraph", "graph", "loop", "agent"))
+    return [float(money), float(graphy)] if (money or graphy) else [0.1, 0.1]
+
+
+async def _fake_embed(texts):
+    return [_fake_vec(t) for t in texts]
+
+
+async def test_embed_missing_only_embeds_new():
+    g = MemoryGraph()
+    g.add_topic("pricing", "token costs"); g.add_topic("langgraph", "agent loop")
+    g.recompute_communities()
+    await g.summarize_dirty(lambda l, t, r: _echo(t))
+
+    n = await g.embed_missing(_fake_embed)
+    assert n == len(g.topics) + len(g.summaries)
+    # second pass: everything already embedded → zero calls
+    assert await g.embed_missing(_fake_embed) == 0
+    # summary text change (re-dirty) clears its vector for re-embedding
+    g.dirty = set(g.communities)
+    await g.summarize_dirty(lambda l, t, r: _echo(t))
+    assert await g.embed_missing(_fake_embed) == len(g.summaries)
+
+
+async def _echo(topics):
+    return " ".join(topics)
+
+
+async def test_vector_recall_ranks_by_cosine():
+    g = MemoryGraph()
+    g.add_topic("pricing", "token costs", chunk="we pay per token")
+    g.add_topic("langgraph", "agent loop")
+    g.recompute_communities()          # no edges → one community per topic
+    await g.summarize_dirty(lambda l, t, r: _echo(t))
+    await g.embed_missing(_fake_embed)
+
+    hit = g.recall("what was our cost budget?", query_vec=[1.0, 0.1])
+    # money cluster ranks first and surfaces the raw source chunk
+    assert hit.index("pricing") < hit.index("langgraph")
+    assert "we pay per token" in hit
+
+    # no query_vec → keyword fallback still works
+    assert "pricing" in g.recall("token costs pricing")
+
+
+def test_vectors_survive_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    g = MemoryGraph()
+    g.add_topic("talos", "the agent")
+    g.vecs["talos"] = [0.25, 0.75]
+    g.communities = {0: ["talos"]}
+    g.summaries = {0: "talos is the agent"}
+    g.summary_vecs = {0: [0.5, 0.5]}
+    save_graph("s3", g)
+    again = load_graph("s3")
+    assert again.vecs["talos"] == [0.25, 0.75]
+    assert again.summary_vecs[0] == [0.5, 0.5]

@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     model: str = "gpt-4o-mini"
     temperature: float = 0.0
 
+    # 🧭 Embedding model for vector recall in graph memory. When set,
+    # recall ranks by cosine similarity instead of keyword overlap.
+    #   local:all-MiniLM-L6-v2  -> in-process via fastembed (no endpoint)
+    #   text-embedding-3-small  -> chat endpoint's /embeddings API
+    # Unset = keyword recall.
+    embed_model: str | None = None
+
     # 🔓 TLS certificate verification for LLM + web_fetch traffic.
     # Set TALOS_VERIFY_SSL=false ONLY if a corporate proxy re-signs your
     # traffic and you can't get its CA bundle. The better fix is to keep

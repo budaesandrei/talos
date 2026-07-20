@@ -1,44 +1,45 @@
-"""🐚 Shell tool — run a command, capture stdout+stderr.
+"""🐚 Shell tool — every command runs as a tracked background job.
 
-The single most powerful (and dangerous) tool an agent can have.
-Milestone M7 wraps it in a permission gate; here it's raw capability.
+Fast commands still feel synchronous: we wait a short grace period and
+return their output inline. Anything slower keeps running as a *job* —
+the model gets the job id / pid / log path immediately, the conversation
+stays unblocked, and the runtime's callback door (see tools/jobs.py)
+announces completion.
+
+Milestone M7 wraps this in a permission gate; policy rules keyed on the
+'shell' tool name apply unchanged, because the tool name didn't change.
 """
 
-import subprocess
+import asyncio
 
 from langchain_core.tools import tool
 
-from talos.infra.environment import detect_shell, shell_command
-from talos.infra.sandbox import wrap_command
+from talos.infra.environment import detect_shell
+from talos.tools.jobs import manager
 
-TIMEOUT_SECONDS = 120
+FOREGROUND_GRACE = 10.0   # seconds a command may hold the loop
 MAX_OUTPUT_CHARS = 8_000
 
 
 @tool
-def shell(command: str) -> str:
+async def shell(command: str) -> str:
     """Run a shell command and return its output (stdout + stderr, exit code).
     The executing shell and its syntax rules are listed in your Environment
-    section — use that syntax."""
-    import os
-
-    cmd = shell_command(command)
-    # 📦 optionally wrap for sandboxed execution (identity when off)
-    wrapped = wrap_command(command, os.getcwd())
-    if isinstance(wrapped, list):
-        cmd = wrapped
+    section — use that syntax. A command still running after ~10s continues
+    as a background job: you immediately get its job id + log path, and a
+    [job #N finished] note arrives when it completes. Never wait or poll in
+    a loop — carry on, and use job_status(id) / job_kill(id) to peek or stop."""
+    job = await manager.start(command)
     try:
-        proc = subprocess.run(
-            cmd,
-            shell=isinstance(cmd, str),
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_SECONDS,
+        rc = await asyncio.wait_for(job.proc.wait(), FOREGROUND_GRACE)
+    except asyncio.TimeoutError:
+        job.background = True  # 🚪 completion will use the callback door
+        return (
+            f"⏳ still running after {FOREGROUND_GRACE:.0f}s — continuing in "
+            f"the background as job #{job.id} (pid {job.pid}). Log: "
+            f"{job.log_path}. A [job #{job.id} finished] note will arrive on "
+            f"completion; job_status({job.id}) shows progress, "
+            f"job_kill({job.id}) stops it."
         )
-    except subprocess.TimeoutExpired:
-        return f"Error: command timed out after {TIMEOUT_SECONDS}s"
-
-    out = (proc.stdout or "") + (proc.stderr or "")
-    if len(out) > MAX_OUTPUT_CHARS:
-        out = out[:MAX_OUTPUT_CHARS] + f"\n… [truncated, {len(out) - MAX_OUTPUT_CHARS} more chars]"
-    return f"exit code: {proc.returncode} (shell: {detect_shell()})\n{out}".strip()
+    out = job.read_log(MAX_OUTPUT_CHARS)
+    return f"exit code: {rc} (shell: {detect_shell()}, job #{job.id})\n{out}".strip()

@@ -1,6 +1,6 @@
 """Tests for model discovery & pricing (M23). No network."""
 
-from talos.integrations.models import estimate_cost, lookup, parse_models
+from talos.models import estimate_cost, lookup, parse_models
 
 DB = {
     "gpt-4o-mini": {
@@ -44,7 +44,7 @@ def test_openrouter_fields_win_over_db():
 
 
 def test_estimate_cost(monkeypatch):
-    import talos.integrations.models as models_mod
+    import talos.models as models_mod
 
     monkeypatch.setattr(models_mod, "_price_db", lambda: DB)
     cost = estimate_cost("claude-sonnet-4-5", 1000, 100)
@@ -67,7 +67,7 @@ def test_string_ids_and_models_key_are_tolerated():
 
 
 def test_fallback_prices_when_db_unreachable(monkeypatch):
-    import talos.integrations.models as mm
+    import talos.models as mm
 
     monkeypatch.setattr(mm, "_db_memo", None)
     monkeypatch.setattr(mm, "_fetch_price_db", lambda: {})
@@ -81,7 +81,7 @@ def test_fallback_prices_when_db_unreachable(monkeypatch):
 def test_provider_models_prices_win_over_github_db(monkeypatch):
     """Enterprise gateways return per-token prices in /models — those are
     OUR prices and must beat the public db."""
-    import talos.integrations.models as mm
+    import talos.models as mm
 
     monkeypatch.setattr(mm, "_provider_meta", {})
     monkeypatch.setattr(mm, "_db_memo", {"my-model": {
@@ -102,7 +102,7 @@ def test_provider_models_prices_win_over_github_db(monkeypatch):
 
 
 def test_one_sided_provider_price_coalesces_to_zero(monkeypatch):
-    import talos.integrations.models as mm
+    import talos.models as mm
 
     monkeypatch.setattr(mm, "_provider_meta",
                         {"half": {"input_cost_per_token": 1e-6}})
@@ -115,7 +115,7 @@ def test_one_sided_provider_price_coalesces_to_zero(monkeypatch):
 def test_models_list_is_fetched_once(monkeypatch):
     import httpx as _httpx
 
-    import talos.integrations.models as mm
+    import talos.models as mm
 
     calls = {"n": 0}
 

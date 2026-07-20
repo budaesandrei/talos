@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from talos.integrations.mcp import _to_adapter_config, load_mcp_config, load_mcp_tools
+from talos.mcp import _to_adapter_config, load_mcp_config, load_mcp_tools
 
 
 def test_missing_config_means_no_tools(tmp_path, monkeypatch):

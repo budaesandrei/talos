@@ -1,6 +1,6 @@
 """Tests for OTel tracing (M38) — focus on the zero-overhead off path."""
 
-from talos.infra import tracing
+from talos import tracing
 
 
 def test_span_is_noop_when_disabled(monkeypatch):

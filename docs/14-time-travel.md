@@ -1,6 +1,6 @@
 # 14 · ⏪ Time travel, verification & self-improvement
 
-> Files: `memory/checkpoints.py`, `lifecycle/planning.py`, `lifecycle/skill_synthesis.py` · Milestones: M35, M36, M40
+> Files: `checkpoints.py`, `planning.py`, `skill_synthesis.py` · Milestones: M35, M36, M40
 
 ## ⏪ Checkpoints (M35)
 

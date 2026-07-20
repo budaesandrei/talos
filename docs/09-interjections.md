@@ -1,6 +1,6 @@
 # 09 · 🎙️ Interjections — talking to a busy agent
 
-> Files: `agent/runtime.py` (pump, classifier, narrator), `agent/graph/builder.py` (stop flag) · Milestone: M20 · Next: [10 — models & cost](10-models-and-cost.md)
+> Files: `runtime/runner.py` (pump, classifier, narrator), `graph/builder.py` (stop flag) · Milestone: M20 · Next: [10 — models & cost](10-models-and-cost.md)
 
 Type while Talos works; what you say determines what happens:
 

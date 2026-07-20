@@ -2,7 +2,7 @@
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from talos.memory.compaction import compact, fuel_gauge, is_summary, SUMMARY_MARKER
+from talos.compaction import compact, fuel_gauge, is_summary, SUMMARY_MARKER
 
 
 async def _fake_summarize(prior, transcript):

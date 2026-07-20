@@ -1,6 +1,6 @@
 # 15 · 🔄 /evolve — the AI-DLC ouroboros
 
-> Files: `lifecycle/evolve.py` + `run_evolve()` · Milestone: M44 (capstone)
+> Files: `evolve.py` + `run_evolve()` · Milestone: M44 (capstone)
 
 The research has every piece but nobody published the closed loop. `/evolve`
 is the whole product lifecycle as a gated cycle on top of AI-DLC:

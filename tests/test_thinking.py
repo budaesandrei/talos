@@ -1,6 +1,6 @@
 """Tests for think-mode stream splitting (M45)."""
 
-from talos.agent.thinking import ThinkSplitter
+from talos.thinking import ThinkSplitter
 
 
 def _collect(fragments):

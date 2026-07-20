@@ -1,6 +1,6 @@
 # 02 · 🕸️ The agent loop (ReAct)
 
-> Files: `agent/graph/state.py`, `agent/graph/builder.py`, `agent/runtime.py` · Milestone: M5 · Next: [03 — tools](03-tools.md)
+> Files: `graph/state.py`, `graph/builder.py`, `runtime/runner.py` · Milestone: M5 · Next: [03 — tools](03-tools.md)
 
 ## The whole idea of an "agent" in one diagram
 

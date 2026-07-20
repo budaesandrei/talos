@@ -2,7 +2,7 @@
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from talos.memory import checkpoints as ck
+from talos import checkpoints as ck
 
 
 def _msgs(n):

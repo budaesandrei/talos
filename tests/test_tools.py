@@ -38,8 +38,9 @@ def test_list_dir(tmp_path):
     assert "sub/" in out and "f.txt" in out
 
 
-def test_shell_captures_exit_code():
-    out = shell.invoke({"command": "echo hello"})
+async def test_shell_captures_exit_code(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # job logs land in ./.talos/jobs
+    out = await shell.ainvoke({"command": "echo hello"})
     assert "exit code: 0" in out and "hello" in out
 
 
