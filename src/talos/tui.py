@@ -68,7 +68,7 @@ STYLE = Style.from_dict(
 
 
 def _commands() -> list[tuple[str, str]]:
-    from talos.ui.commands import BUILTINS, custom_commands
+    from talos.commands import BUILTINS, custom_commands
 
     cmds = dict(BUILTINS)
     for name in custom_commands():

@@ -49,18 +49,18 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from talos.ui.banner import print_banner
-from talos.ui.commands import dispatch, help_text
-from talos.memory.compaction import SUMMARY_PROMPT, compact, fuel_gauge
+from talos.banner import print_banner
+from talos.commands import dispatch, help_text
+from talos.compaction import SUMMARY_PROMPT, compact, fuel_gauge
 from talos.config import settings
-from talos.agent.context import build_system_prompt
-from talos.agent.graph.builder import build_agent_graph
-from talos.agent.llm import build_llm
-from talos.integrations.mcp import load_mcp_tools
-from talos.ui.mermaid import ascii_render, extract_mermaid, open_in_browser
-from talos.integrations.models import estimate_cost
-from talos.infra.permissions import PermissionGate
-from talos.lifecycle.planning import (
+from talos.context import build_system_prompt
+from talos.graph.builder import build_agent_graph
+from talos.llm import build_llm
+from talos.mcp import load_mcp_tools
+from talos.mermaid import ascii_render, extract_mermaid, open_in_browser
+from talos.models import estimate_cost
+from talos.permissions import PermissionGate
+from talos.planning import (
     ELABORATION_PROMPT,
     VERIFY_PROMPT,
     construct_prompt,
@@ -68,7 +68,7 @@ from talos.lifecycle.planning import (
     parse_verdict,
     save_plan,
 )
-from talos.memory.sessions import (
+from talos.sessions import (
     get_session_meta,
     latest_session_id,
     load_session,
@@ -76,7 +76,7 @@ from talos.memory.sessions import (
     save_session,
     set_session_meta,
 )
-from talos.agent.thinking import ThinkSplitter
+from talos.thinking import ThinkSplitter
 from talos.tools import get_tools
 from talos.tools.jobs import manager as job_manager
 
@@ -152,7 +152,7 @@ class _PromptPump:
     """
 
     def __init__(self, stats=None, on_escape=None):
-        from talos.ui.tui import StatusState
+        from talos.tui import StatusState
 
         self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
         self.eof = False
@@ -163,7 +163,7 @@ class _PromptPump:
         self._task = asyncio.create_task(self._loop())
 
     async def _loop(self) -> None:
-        from talos.ui.tui import build_session
+        from talos.tui import build_session
 
         session = build_session(
             stats=self._stats, status=self.status_state, on_escape=self._on_escape
@@ -357,7 +357,7 @@ class Runtime:
         return estimate_cost(self.model_name, self.usage["input"], self.usage["output"])
 
     def context_limit(self) -> int | None:
-        from talos.integrations.models import provider_meta, lookup
+        from talos.models import provider_meta, lookup
 
         meta = provider_meta(self.model_name) or lookup(self.model_name)
         return meta.get("max_input_tokens")
@@ -420,7 +420,7 @@ class Runtime:
     def _embed_fn(self):
         """🧭 async batch-embed callable for graph memory, or None when no
         TALOS_EMBED_MODEL is configured (recall then stays keyword-based)."""
-        from talos.agent.llm import build_embedder
+        from talos.llm import build_embedder
 
         embedder = build_embedder()
         if embedder is None:
@@ -448,7 +448,7 @@ class Runtime:
             # 🧠 fold the dropped turns into graph memory (M34) so they stay
             # recallable. The summary message is new_messages[0].
             try:
-                from talos.memory.graph_memory import ingest_async
+                from talos.graph_memory import ingest_async
 
                 folded = next((str(m.content) for m in new_messages), "")
                 stats = await ingest_async(
@@ -518,7 +518,7 @@ class Runtime:
         # 👁 turn the text into multimodal content if it references images
         # and the model can see (otherwise this returns the plain string)
         try:
-            from talos.integrations.vision import build_content
+            from talos.vision import build_content
 
             content = build_content(user_input, self.model_name)
         except Exception:
@@ -673,7 +673,7 @@ class Runtime:
             save_session(self.session_id, self.messages)
             set_session_meta(self.session_id, usage=self.usage, model=self.model_name)
             try:  # ⏪ time-travel checkpoint (chat + file snapshot)
-                from talos.memory.checkpoints import save_checkpoint
+                from talos.checkpoints import save_checkpoint
 
                 save_checkpoint(self.usage["turns"], user_input, self.messages)
             except Exception:
@@ -709,7 +709,7 @@ class Runtime:
 
         from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
 
-        from talos.agent.workspace import INIT_PROMPT, snapshot
+        from talos.workspace import INIT_PROMPT, snapshot
 
         self.status.set("🗂️ surveying the workspace…")
         msg = await build_llm(self.model_name).ainvoke(
@@ -722,7 +722,7 @@ class Runtime:
             return
         existing = Path("TALOS.md")
         if existing.is_file():
-            console.print(r"[yellow]TALOS.md exists — overwrite? \[y/N] ›[/] ", end="")
+            console.print("[yellow]TALOS.md exists — overwrite? \[y/N] ›[/] ", end="")
             # handled inline only when a pump is around; default safe = skip
         Path("TALOS.md").write_text(content + "\n", encoding="utf-8")
         console.print("[green]🗂️ wrote TALOS.md — workspace rules for future "
@@ -730,7 +730,7 @@ class Runtime:
 
     async def learn_skill(self) -> None:
         """🧪 Synthesize a verified skill from the recent conversation."""
-        from talos.lifecycle.skill_synthesis import synthesize
+        from talos.skill_synthesis import synthesize
 
         async def propose(prompt, transcript):
             from langchain_core.messages import HumanMessage as HM, SystemMessage as SM
@@ -942,7 +942,7 @@ async def _gather_mcp_tools() -> list:
 
 async def run_plan(rt: Runtime, pump, task: str) -> None:
     """🗺️ The /plan flow: elaborate (read-only) → human gate → construct."""
-    from talos.agent.context import environment_info
+    from talos.context import environment_info
     from talos.tools.task_tool import _resolve_tools
 
     if not task:
@@ -996,7 +996,7 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
     console.print(f"[dim]🗺️ saved to {path}[/]")
 
     # 🚦 the human gate
-    console.print(r"[yellow]execute? \[y]es · \[r]evise · \[n]ot now ›[/] ", end="")
+    console.print("[yellow]execute? \[y]es · \[r]evise · \[n]ot now ›[/] ", end="")
     verdict = (await pump.queue.get() or "").strip().lower()
     if verdict.startswith("y"):
         # 🔨 construct phase = a normal turn: full tools, gate, interjections
@@ -1013,8 +1013,8 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
 async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     """🔄 The AI-DLC ouroboros: debt → persona research → requirements → plan.
     Every phase is human-gated."""
-    from talos.agent.context import environment_info
-    from talos.lifecycle.evolve import (
+    from talos.context import environment_info
+    from talos.evolve import (
         DEBT_PROMPT, PERSONAS, REQUIREMENTS_PROMPT, is_requirements_ready,
         research_prompt,
     )
@@ -1044,7 +1044,7 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     rt._track_usage(debt["messages"][-1])
     console.print(Panel(Markdown(debt_report), title="🧹 tech-debt report",
                         border_style="cyan"))
-    console.print(r"[yellow]continue to market/persona research? \[Y/n] ›[/] ", end="")
+    console.print("[yellow]continue to market/persona research? \[Y/n] ›[/] ", end="")
     if (await pump.queue.get() or "y").strip().lower().startswith("n"):
         console.print("[dim]parked after debt phase[/]")
         return
@@ -1077,7 +1077,7 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
                         border_style="cyan"))
     # persist alongside plans
     try:
-        from talos.lifecycle.planning import plans_dir
+        from talos.planning import plans_dir
         from datetime import datetime
         plans_dir().mkdir(parents=True, exist_ok=True)
         out = plans_dir() / f"evolve-{datetime.now():%Y%m%d-%H%M%S}.md"
@@ -1087,7 +1087,7 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     except Exception:
         pass
 
-    console.print(r"[yellow]feed these into /plan now? \[Y/n] ›[/] ", end="")
+    console.print("[yellow]feed these into /plan now? \[Y/n] ›[/] ", end="")
     if (await pump.queue.get() or "y").strip().lower().startswith("n"):
         console.print("[dim]requirements saved — run /plan when ready[/]")
         return
@@ -1136,7 +1136,9 @@ async def repl(
     """
     rt = Runtime(model, yolo=yolo, resume=resume, extra_tools=await _gather_mcp_tools())
 
-    # 🕹️ banner first, before any prompt is drawn.
+    # 🕹️ banner FIRST — its Live animation needs the raw terminal. Only
+    # then start the prompt + patch_stdout, or every animation frame
+    # would be re-printed above the prompt as a separate block.
     print_banner(
         console,
         model=rt.model_name,
@@ -1155,7 +1157,7 @@ async def repl(
 
     # 🔥 warm /models in the background: one round trip gives the picker
     # its list AND the cost engine the provider's own per-token prices
-    from talos.integrations.models import prime_models_cache
+    from talos.models import prime_models_cache
 
     asyncio.get_running_loop().run_in_executor(None, prime_models_cache)
 
@@ -1313,7 +1315,7 @@ async def repl(
 
 async def _do_rewind(rt: Runtime, pump) -> None:
     """⏪ Interactive checkpoint restore with a scope choice."""
-    from talos.memory.checkpoints import list_checkpoints, restore
+    from talos.checkpoints import list_checkpoints, restore
 
     cks = list_checkpoints()
     if not cks:
@@ -1338,7 +1340,7 @@ async def _do_rewind(rt: Runtime, pump) -> None:
         return
     target = recent[int(pick) - 1]
     console.print(
-        r"[yellow]restore what? \[b]oth · \[c]hat only · \[f]iles only ›[/] ",
+        "[yellow]restore what? \[b]oth · \[c]hat only · \[f]iles only ›[/] ",
         end="",
     )
     scope_key = (await pump.queue.get() or "b").strip().lower()[:1]
@@ -1365,7 +1367,7 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         for t in get_tools():
             console.print(f"  {TOOL_EMOJI.get(t.name, '🔧')} [cyan]{t.name}[/] — {t.description.splitlines()[0]}")
     elif name == "/memory":
-        from talos.memory.notes import load_memory
+        from talos.memory import load_memory
 
         console.print(load_memory() or "[dim](memory is empty)[/]")
     elif name == "/rewind":
@@ -1385,7 +1387,7 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
     elif name == "/usage":
         from rich.table import Table as RichTable
 
-        from talos.memory.sessions import all_time_usage
+        from talos.sessions import all_time_usage
 
         u, a = rt.usage, all_time_usage()
         cost = rt.session_cost()
@@ -1411,7 +1413,7 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         console.print(Panel(table, title="📊 usage", border_style="dim",
                             title_align="left", padding=(1, 2)))
     elif name == "/models":
-        import talos.integrations.models as _mm
+        import talos.models as _mm
 
         if _mm._models_memo is None:
             rt.status.set("📇 fetching /v1/models…")
