@@ -8,12 +8,20 @@ message is reprinted in a bordered "you" panel, rendered as **markdown** so
 pasted ```code``` fences and `inline code` display properly — and the
 border is the clean separation from the agent's reply below.
 
-**Esc to stop**: while a turn streams there is no live prompt, so a tiny
-daemon thread (`_EscWatcher` in `agent/runtime.py`) peeks at the keyboard.
-Esc once sets the graceful `stop_flag` (the graph halts at the next safe
-boundary); Esc again hard-cancels the turn. Any other key retires the
-watcher so type-ahead still reaches the next prompt. Windows-only — POSIX
-terminals keep cooked-mode type-ahead — and Ctrl-C works everywhere.
+**The pinned prompt** (`_PromptPump`): one prompt_toolkit session stays
+alive for the whole chat — the bottom input line is always yours, and you
+can type (visibly) while the agent works. Agent output prints ABOVE the
+prompt through `patch_stdout`; the runtime streams **finished markdown
+blocks** (`_split_ready`: split on blank lines, never inside a ``` fence)
+instead of raw tokens or a repainting `rich.Live` region, which is what
+keeps the input line and the stream from ever fighting over the cursor.
+
+**Esc to stop**: Esc is a real keybinding on the pinned prompt. Once sets
+the graceful `stop_flag` (the graph halts at the next safe boundary);
+twice hard-cancels the turn — and a cancelled `shell` tool **kills its
+running command's process tree** instead of orphaning it. Ctrl-C still
+works everywhere. (Esc fires after a ~1s ambiguity timeout because it's
+also the prefix of the Alt+Enter newline binding.)
 
 
 > Files: `agent/runtime.py`, `ui/tui.py`, `ui/banner.py` · Milestones: M9, M16, M19, M25–M28

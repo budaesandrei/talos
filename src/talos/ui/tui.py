@@ -46,7 +46,10 @@ class StatusState:
         if not self.text:
             return ""
         frame = SPINNER_FRAMES[int(time.monotonic() * 6) % len(SPINNER_FRAMES)]
-        return FormattedText([("class:status", f" {frame} {self.text}")])
+        return FormattedText([
+            ("class:status", f" {frame} {self.text}"),
+            ("class:menu-more", "  · Esc stops"),
+        ])
 
 STYLE = Style.from_dict(
     {
@@ -126,7 +129,7 @@ class CommandMenu:
         return FormattedText(rows)
 
 
-def build_session(stats=None, status: StatusState | None = None):
+def build_session(stats=None, status: StatusState | None = None, on_escape=None):
     """A PromptSession with the inline menu wired in.
 
     ``stats``: optional zero-arg callable returning a short string (session
@@ -136,6 +139,10 @@ def build_session(stats=None, status: StatusState | None = None):
     ``status``: a StatusState; while the agent works, its text renders in
     the bottom toolbar (with the ⚒ forge spinner). The toolbar shows the
     command menu when you're typing a slash command, the status otherwise.
+
+    ``on_escape``: zero-arg callback fired when Esc is pressed. The runtime
+    wires it to 'stop the busy turn': Esc once = graceful stop at the next
+    safe boundary, Esc again = hard cancel. A no-op while idle.
     """
     from prompt_toolkit import PromptSession
     from prompt_toolkit.cursor_shapes import CursorShape
@@ -143,6 +150,15 @@ def build_session(stats=None, status: StatusState | None = None):
     menu = CommandMenu()
     kb = KeyBindings()
     menu_on = Condition(menu.active)
+
+    if on_escape is not None:
+        # ⎋ NOT eager: Esc is also the prefix of the Alt+Enter newline
+        # binding below, so a bare Esc fires after prompt_toolkit's
+        # ambiguity timeout (~1s). Two quick presses deliver two events —
+        # exactly the graceful-then-hard cancel escalation we want.
+        @kb.add("escape")
+        def _escape(event):
+            on_escape()
 
     @kb.add("up", filter=menu_on)
     def _up(event):

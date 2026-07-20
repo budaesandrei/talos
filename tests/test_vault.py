@@ -363,17 +363,21 @@ def test_vault_summary_includes_scope():
 def test_shell_substitutes_placeholders_before_exec():
     """Smoke test: a shell command with a {{value:..}} placeholder should
     have the value substituted before exec."""
+    import asyncio
+
     from talos.tools.shell import shell
     vault.add_entry("greeting", "hello-vault", kind="value", scope="project")
-    out = shell.invoke({"command": "echo {{value:greeting}}"})
+    out = asyncio.run(shell.ainvoke({"command": "echo {{value:greeting}}"}))
     assert "hello-vault" in out
 
 
 def test_shell_warns_on_unresolved_placeholder():
     """When a placeholder doesn't resolve, the command runs anyway with
     the literal placeholder, and the output is prefixed with a warning."""
+    import asyncio
+
     from talos.tools.shell import shell
-    out = shell.invoke({"command": "echo {{secret:does_not_exist}}"})
+    out = asyncio.run(shell.ainvoke({"command": "echo {{secret:does_not_exist}}"}))
     assert "unresolved vault placeholders" in out
     assert "secret:does_not_exist" in out
 

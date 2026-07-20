@@ -39,7 +39,10 @@ def test_list_dir(tmp_path):
 
 
 def test_shell_captures_exit_code():
-    out = shell.invoke({"command": "echo hello"})
+    # the shell tool is async (so a cancelled turn can kill the process)
+    import asyncio
+
+    out = asyncio.run(shell.ainvoke({"command": "echo hello"}))
     assert "exit code: 0" in out and "hello" in out
 
 

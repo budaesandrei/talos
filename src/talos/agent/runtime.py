@@ -20,18 +20,19 @@ UX details worth stealing:
   ``↳`` previews — enough to follow along without drowning in output
 - permission prompts pause the spinner, ask, then resume
 - Ctrl-C cancels the current turn, not the whole session
-- so does Esc (Windows, turn-based reader): once = graceful stop at
-  the next safe boundary, twice = hard cancel — see ``_EscWatcher``
+- so does Esc: once = graceful stop at the next safe boundary, twice =
+  hard cancel (which also kills the shell tool's running command)
+- the bottom input line is ALWAYS yours: agent output prints above the
+  persistent prompt (patch_stdout), so you can type — visibly — while
+  the agent streams, kiro/claude-code style
 """
 
 import asyncio
 import itertools
 import json
-import os
 import re
 import sys
 import threading
-import time
 
 from langchain_core.messages import (
     AIMessage,
@@ -129,120 +130,84 @@ def _args_preview(args: dict, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-class _QueueAdapter:
-    """Lets one-shot prompt code reuse the ``await pump.queue.get()`` API:
-    each ``get()`` simply shows the prompt once and returns the line."""
+def _split_ready(buffer: str, markdown: bool) -> tuple[str, str]:
+    """✂️ Split streamed text into (ready-to-print, still-forming).
 
-    def __init__(self, reader):
-        self._reader = reader
+    With the pinned prompt alive, streamed output must be append-only
+    prints ABOVE the prompt — never a live region that repaints. So we
+    print only FINISHED units as they complete:
 
-    async def get(self):
-        return await self._reader.get_line()
+    - markdown on: a block, i.e. text up to a blank line that is not
+      inside a ``` code fence — blocks render correctly in isolation
+    - markdown off: whole lines
+    """
+    if not markdown:
+        idx = buffer.rfind("\n")
+        return ("", buffer) if idx < 0 else (buffer[: idx + 1], buffer[idx + 1 :])
+    best = -1
+    pos = buffer.find("\n\n")
+    while pos != -1:
+        fences = len(re.findall(r"^\s{0,3}```", buffer[:pos], re.M))
+        if fences % 2 == 0:  # an odd count would split an open code fence
+            best = pos
+        pos = buffer.find("\n\n", pos + 1)
+    if best < 0:
+        return "", buffer
+    return buffer[:best], buffer[best + 2 :]
 
 
 class _PromptPump:
-    """⌨️ Fancy line reader — turn-based, NOT pinned.
+    """⌨️→📬 Persistent fancy reader — the bottom input line is ALWAYS yours.
 
-    The previous design kept a prompt_toolkit prompt alive for the whole
-    session and printed agent output *through* ``patch_stdout``. That
-    repainted the app on every token (flicker), pinned the cursor at the
-    prompt (no separation), and corrupted scrollback when you scrolled
-    mid-stream (duplicated paragraphs).
+    One prompt_toolkit session stays alive for the whole session
+    (kiro/claude-code style): you type — visibly — in the bottom line while
+    agent output prints ABOVE it through ``patch_stdout``. Submitted lines
+    land in an asyncio queue: between turns they're the next message;
+    during a turn they're routed as interjections. Esc is a real
+    keybinding (``on_escape``): once = graceful stop, twice = hard cancel.
 
-    This version runs the prompt only when we actually need a line — between
-    turns, or for an approval/plan question. During streaming there is NO
-    prompt and NO patch_stdout, so tokens go straight to the terminal:
-    clean separation, zero flicker, native scrollback.
+    The flicker/scrollback problems that retired the earlier pinned design
+    came from rich.Live repainting the growing answer underneath the
+    prompt. The runtime now streams FINISHED markdown blocks instead
+    (append-only prints above the prompt), so the two never fight.
     """
 
     fancy = True
 
-    def __init__(self, stats=None):
+    def __init__(self, stats=None, on_escape=None):
+        from talos.ui.tui import StatusState
+
+        self.queue: "asyncio.Queue[str | None]" = asyncio.Queue()
         self.eof = False
+        self.status_state = StatusState()  # ⚒ rendered in the prompt's toolbar
         self._stats = stats
-        self._session = None
-        self.queue = _QueueAdapter(self)  # compat for await pump.queue.get()
+        self._on_escape = on_escape       # ⎋ stop-the-turn callback
+        self._task = asyncio.create_task(self._loop())
 
-    def _ensure(self):
-        if self._session is None:
-            from talos.ui.tui import build_session
+    async def _loop(self) -> None:
+        from talos.ui.tui import build_session
 
-            self._session = build_session(stats=self._stats)
-        return self._session
-
-    async def get_line(self, prompt_text=None):
-        session = self._ensure()
-        try:
-            if prompt_text is not None:
-                return await session.prompt_async(prompt_text)
-            return await session.prompt_async()
-        except EOFError:           # Ctrl-D → end the session
-            self.eof = True
-            return None
-        except KeyboardInterrupt:  # Ctrl-C at an empty prompt → ignore
-            return ""
+        session = build_session(
+            stats=self._stats, status=self.status_state,
+            on_escape=self._on_escape,
+        )
+        while True:
+            try:
+                line = await session.prompt_async()
+            except EOFError:           # Ctrl-D → end the session
+                await self.queue.put(None)
+                return
+            except KeyboardInterrupt:  # Ctrl-C at an empty prompt → ignore
+                continue
+            await self.queue.put(line)
 
 
-class _EscWatcher:
-    """⎋ Esc-to-stop for the turn-based reader (Windows).
-
-    While a turn streams, no prompt is running and nobody reads the
-    keyboard — so this daemon thread peeks at it. The first key decides:
-    Esc fires the stop callback (press again for a hard cancel); any other
-    key is pushed back for the next prompt's type-ahead and the watcher
-    retires for the rest of the turn. POSIX terminals keep line-buffered
-    type-ahead that raw reads would break, so this is Windows-only —
-    Ctrl-C still cancels everywhere.
-    """
-
-    def __init__(self, loop, on_escape):
-        self._loop = loop
-        self._on_escape = on_escape
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if os.name != "nt" or not sys.stdin.isatty():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._watch, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=0.2)  # hand the keyboard back cleanly
-            self._thread = None
-
-    def _watch(self) -> None:
-        import msvcrt
-
-        while not self._stop.is_set():
-            if msvcrt.kbhit():
-                ch = msvcrt.getwch()
-                if ch == "\x1b":
-                    self._loop.call_soon_threadsafe(self._on_escape)
-                    continue              # stay armed: 2nd Esc = hard cancel
-                if ch in ("\x00", "\xe0"):
-                    if msvcrt.kbhit():
-                        msvcrt.getwch()   # swallow the arrow/F-key pair
-                    continue
-                try:
-                    msvcrt.ungetwch(ch)   # best effort: return it to type-ahead
-                except Exception:
-                    pass
-                return                    # user is typing — retire this turn
-            time.sleep(0.05)
-
-
-def make_input(stats=None):
-    """Pick the input mechanism:
-    - a real terminal + interjections OFF → the clean turn-based fancy reader
-    - interjections ON, or a pipe/non-tty → the always-on stdin pump
-    """
+def make_input(stats=None, on_escape=None):
+    """Persistent fancy prompt on real terminals; plain thread pump for
+    pipes/tests. Both expose the same ``.queue`` / ``.eof`` contract."""
     tty = sys.stdin.isatty() and sys.stdout.isatty()
-    if tty and not settings.interject:
-        return _PromptPump(stats)
+    if tty:
+        return _PromptPump(stats, on_escape)
     return _StdinPump()
 
 
@@ -418,9 +383,7 @@ class Runtime:
         self.inbox: list[str] = []              # 📨 /btw-style queued notes
         self._activity: list[str] = []          # 🗣️ narrator's source material
         self._line_request: asyncio.Future | None = None  # approval waiting?
-        self._reader = None  # one-shot reader, set by the repl in fancy mode
         self._turn_task = None      # ⎋ Esc targets this
-        self._esc_watcher = None    # armed by the repl while a turn runs
         self._gate = PermissionGate(
             approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
@@ -486,8 +449,7 @@ class Runtime:
     def _usage_suffix(self) -> str:
         """The 'how much have I spent' tail on the spinner line."""
         line = self.stats_line()
-        hint = " · Esc stops" if self._esc_watcher is not None else ""
-        return (f" · {line}" if line else "") + hint
+        return f" · {line}" if line else ""
 
     def stats_line(self) -> str:
         """📊 right-edge prompt stats: context fuel · session tokens · $."""
@@ -612,24 +574,14 @@ class Runtime:
             )
         )
         console.print(r"[yellow]allow? \[y]es · \[n]o · \[a]lways ›[/] ", end="")
-        if self._reader is not None:
-            # 🆕 turn-based fancy mode: read the answer with a one-shot prompt
-            # (pause the Esc watcher so two readers never race for keys)
-            if self._esc_watcher is not None:
-                self._esc_watcher.stop()
-            try:
-                answer = await self._reader.get_line("") or ""
-            finally:
-                if self._esc_watcher is not None:
-                    self._esc_watcher.start()
-        else:
-            # interject mode: park a Future the interjection loop fulfils
-            fut: asyncio.Future = asyncio.get_running_loop().create_future()
-            self._line_request = fut
-            try:
-                answer = await fut
-            finally:
-                self._line_request = None
+        # park a Future; the run_turn interjection loop fulfils it with the
+        # next line the user submits in the (always-alive) bottom prompt
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._line_request = fut
+        try:
+            answer = await fut
+        finally:
+            self._line_request = None
         self.status.set(f"⚙️  running {tool_name}…")
         return answer
 
@@ -682,6 +634,11 @@ class Runtime:
         reasoning_open = False
         header_printed = False
         self._body_shown = False  # did any answer text reach the screen?
+        # 🪟 fancy mode = the persistent prompt owns the bottom of the screen
+        # (status sink attached). Streamed output must then be append-only
+        # prints ABOVE the prompt: finished markdown blocks, never raw
+        # tokens or cursor-up repaints that would fight the input line.
+        fancy = self.status.sink is not None
 
         def ensure_header() -> None:
             nonlocal header_printed
@@ -698,12 +655,23 @@ class Runtime:
                     answer_rows += 1
                 answer_rows += len(line) // width
 
+        def flush_fancy(text_block: str) -> None:
+            if not text_block.strip():
+                return
+            ensure_header()
+            if settings.markdown:
+                console.print(Markdown(text_block))
+            else:
+                console.print(text_block.rstrip("\n"), markup=False, highlight=False)
+
         def close_stream() -> None:
             nonlocal buffer, body_printed, reasoning_open, answer_rows
             if reasoning_open:
                 print()
                 reasoning_open = False
-            if body_printed:
+            if fancy:
+                flush_fancy(buffer)  # whatever block was still forming
+            elif body_printed:
                 print()  # finish the streamed line
                 if (settings.markdown and buffer.strip()
                         and answer_rows + 1 < console.height):
@@ -753,12 +721,20 @@ class Runtime:
                         if reasoning_open:
                             print()  # close the reasoning block
                             reasoning_open = False
-                        self.status.stop()
-                        ensure_header()
-                        body_printed = True
                         self._body_shown = True
                         buffer += text
-                        emit(text)  # append-only, flicker-free
+                        if fancy:
+                            # ⌨️ your input line stays live at the bottom;
+                            # finished blocks print above it and the toolbar
+                            # spinner shows the answer is flowing
+                            self.status.set("✍️ writing…")
+                            ready, buffer = _split_ready(buffer, settings.markdown)
+                            flush_fancy(ready)
+                        else:
+                            self.status.stop()
+                            ensure_header()
+                            body_printed = True
+                            emit(text)  # append-only, flicker-free
 
                 elif mode == "updates":
                     close_stream()  # tool lines must not fight the Live region
@@ -1360,42 +1336,28 @@ async def repl(
 
     asyncio.get_running_loop().run_in_executor(None, prime_models_cache)
 
-    pump = make_input(stats=rt.stats_line)
+    # ⌨️ sole input reader + 📊 rprompt stats + ⎋ Esc-to-stop
+    pump = make_input(stats=rt.stats_line, on_escape=rt.request_stop)
     fancy = getattr(pump, "fancy", False)
+    # the ⚒ status renders in the prompt's pinned toolbar (fancy) or falls
+    # back to a rich spinner (pipes)
+    rt.status.sink = getattr(pump, "status_state", None)
     if fancy:
-        # one-shot reader handles approval/plan/evolve prompts mid-turn
-        rt._reader = pump
+        # 🪟 agent output prints ABOVE the persistent bottom prompt; your
+        # half-typed message survives everything the agent streams
+        from prompt_toolkit.patch_stdout import patch_stdout
+
+        stdout_ctx = patch_stdout(raw=True)
+        stdout_ctx.__enter__()
     else:
-        # plain pump: the ⚒ status renders in its pinned toolbar
-        rt.status.sink = getattr(pump, "status_state", None)
+        stdout_ctx = None
 
     async def run_turn(text: str) -> None:
+        """One turn, listening for interjections the whole time: the pump
+        keeps reading while the graph runs, so typed lines become status
+        questions, stop requests, approval answers, or queued notes —
+        and Esc (via the prompt's keybinding) stops the turn."""
         render_user_message(text)  # 🟦 bordered echo, then the agent replies
-        if fancy:
-            # 🆕 turn-based: no pinned prompt, no patch_stdout — tokens stream
-            # straight to the terminal (clean separation, no flicker, real
-            # scrollback). Ctrl-C interrupts just this turn; on Windows a
-            # bare Esc does too (once = graceful, twice = hard cancel).
-            turn_task = asyncio.create_task(rt.turn(text))
-            rt._turn_task = turn_task
-            watcher = _EscWatcher(asyncio.get_running_loop(), rt.request_stop)
-            rt._esc_watcher = watcher
-            watcher.start()
-            try:
-                await turn_task
-            except asyncio.CancelledError:
-                rt.status.stop()
-                console.print("\n[yellow]⛔ stopped — session saved[/]")
-            except KeyboardInterrupt:
-                turn_task.cancel()
-                rt.status.stop()
-                console.print("\n[yellow]⏹  turn interrupted[/]")
-            finally:
-                watcher.stop()
-                rt._esc_watcher = None
-                rt._turn_task = None
-            return
-        # ⌨️ interject mode: watch stdin while the turn streams
         turn_task = asyncio.create_task(rt.turn(text))
         rt._turn_task = turn_task
         try:
@@ -1502,14 +1464,12 @@ async def repl(
             console.print("[dim]bye 👋[/]")
             break
 
-        if fancy:
-            line = await pump.get_line()
-        else:
+        if not fancy:
             console.print("[dim]▏ type below[/]")
-            try:
-                line = await pump.queue.get()
-            except KeyboardInterrupt:
-                line = None
+        try:
+            line = await pump.queue.get()
+        except KeyboardInterrupt:
+            line = None
         if line is None:
             console.print("\n[dim]bye 👋[/]")
             break
@@ -1522,6 +1482,9 @@ async def repl(
             console.print(f"[dim]📋 pasted {len(stripped):,} chars[/]")
         if not await handle_line(stripped):
             break
+
+    if stdout_ctx is not None:
+        stdout_ctx.__exit__(None, None, None)
 
 async def _do_rewind(rt: Runtime, pump) -> None:
     """⏪ Interactive checkpoint restore with a scope choice."""
