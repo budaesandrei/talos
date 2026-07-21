@@ -400,6 +400,9 @@ class Runtime:
         else:
             self.session_id = new_session_id()
             self.messages = []
+        # 🧹 repair sessions that were saved mid-cancel in older builds
+        # (dangling tool calls would 400 every request after resume)
+        self._close_dangling_tool_calls()
         self.last_mermaid: list[str] = []  # 🧜 filled after each reply
         meta = get_session_meta(self.session_id)
         self.title: str = meta.get("title", "")
@@ -778,6 +781,12 @@ class Runtime:
                         and "<thinking>" in m.content.lower():
                     m.content = ThinkSplitter.strip(m.content)
             self.messages.extend(collected)
+            # 🧹 a cancelled turn (Esc ×2 / Ctrl-C) can leave an AIMessage
+            # whose tool_calls never received their ToolMessage results.
+            # Providers reject such a history on EVERY future call (400),
+            # bricking the session — so close the dangling calls out with
+            # explicit "cancelled" results before saving.
+            self._close_dangling_tool_calls()
             save_session(self.session_id, self.messages)
             set_session_meta(self.session_id, usage=self.usage, model=self.model_name)
             try:  # ⏪ time-travel checkpoint (chat + file snapshot)
@@ -935,6 +944,35 @@ class Runtime:
                 set_session_meta(self.session_id, title=title)
         except Exception:
             pass  # cosmetic feature — never disturb the session
+
+    def _close_dangling_tool_calls(self) -> None:
+        """🧹 Give every unanswered tool_call a synthetic 'cancelled' result.
+
+        The OpenAI-style contract: an assistant message with tool_calls must
+        be followed by one ToolMessage per call id. A hard-cancelled turn
+        breaks that contract, and the provider then 400s every subsequent
+        request. Inserting explicit cancellation results keeps the history
+        valid AND tells the model the truth about what happened."""
+        answered = {
+            getattr(m, "tool_call_id", None)
+            for m in self.messages if isinstance(m, ToolMessage)
+        }
+        fixups: list[tuple[int, ToolMessage]] = []
+        for i, m in enumerate(self.messages):
+            if isinstance(m, AIMessage):
+                for call in m.tool_calls or []:
+                    call_id = call.get("id")
+                    if call_id and call_id not in answered:
+                        fixups.append((i, ToolMessage(
+                            content="⛔ cancelled by the user before this "
+                                    "tool could run",
+                            tool_call_id=call_id,
+                            name=call.get("name") or "tool",
+                        )))
+        # insert each result right after its assistant message, keeping
+        # cumulative offsets straight when several fixups land in a row
+        for offset, (i, tm) in enumerate(fixups):
+            self.messages.insert(i + 1 + offset, tm)
 
     # ── ⎋ Esc pressed while a turn runs ─────────────────────────────────
     def request_stop(self) -> None:
