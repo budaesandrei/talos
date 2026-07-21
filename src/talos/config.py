@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     # "off" disables.
     prompt_cache: str = "auto"
 
+    # 🧬 Embedder for the sessions/knowledge KBs:
+    #   auto     — sentence-transformers if installed, else hash fallback
+    #   semantic — force sentence-transformers (raises if not installed)
+    #   hash     — force the offline hash fallback (no HuggingFace download).
+    #              Use on locked-down networks; semantic search stops working
+    #              but everything else runs fine.
+    embedder: str = "auto"
+
     # 🔐 MSAL / Microsoft Entra ID client-credentials auth (enterprise
     # gateways). When client_id + client_secret + tenant_id are ALL set,
     # Talos acquires its bearer token from Azure AD instead of using

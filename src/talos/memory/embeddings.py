@@ -109,13 +109,25 @@ class SentenceTransformersEmbedder:
 _cached_default: Embedder | None = None
 
 
-def get_embedder(*, prefer: str = "auto") -> Embedder:
+def get_embedder(*, prefer: str | None = None) -> Embedder:
     """Return an embedder. ``prefer='auto'`` tries sentence-transformers
     first, falls back to HashEmbedder with a warning. ``prefer='hash'``
     or ``prefer='semantic'`` forces a specific backend.
 
+    ``prefer=None`` (default) reads ``TALOS_EMBEDDER`` — so
+    ``TALOS_EMBEDDER=hash`` forces the offline path even when
+    sentence-transformers is installed. Handy on locked-down networks
+    where the HuggingFace download at first construction fails.
+
     Cached: the first call materializes the embedder (potentially
     downloading the model); subsequent calls reuse it."""
+    if prefer is None:
+        try:
+            from talos.config import settings
+
+            prefer = (settings.embedder or "auto").lower()
+        except Exception:
+            prefer = "auto"
     global _cached_default
     if _cached_default is not None and prefer == "auto":
         return _cached_default
