@@ -15,10 +15,10 @@ import subprocess
 
 from langchain_core.tools import tool
 
+from talos.config import settings
 from talos.infra.environment import detect_shell, shell_command
 from talos.infra.sandbox import wrap_command
 
-TIMEOUT_SECONDS = 120
 MAX_OUTPUT_CHARS = 8_000
 
 
@@ -40,10 +40,28 @@ def _kill_tree(pid: int) -> None:
 
 
 @tool
-async def shell(command: str) -> str:
+async def shell(
+    command: str,
+    timeout: int | None = None,
+    timeout_reason: str | None = None,
+) -> str:
     """Run a shell command and return its output (stdout + stderr, exit code).
     The executing shell and its syntax rules are listed in your Environment
     section — use that syntax.
+
+    ⏱ ``timeout``: max seconds to wait; default 120 (TALOS_SHELL_TIMEOUT).
+    NO upper limit — pick whatever the command actually needs (300 for
+    a test suite, 600 for `npm install`, 1800 for a big dataset fetch).
+    But: **when you set timeout above the default, you MUST provide
+    ``timeout_reason``** explaining why (e.g., "installing pytorch —
+    typically 3-5 min", "restoring a 2GB db dump"). The reason renders
+    in the tool-call preview so the user sees your justification BEFORE
+    the command starts and can Esc-cancel if it looks off. Requests
+    without a reason are rejected — retry with one. Keep the timeout
+    small when a hang would waste the user's time; knowing sooner that
+    something's stuck is usually worth more than the extra minute. If
+    the command times out, its process tree is killed. The user can
+    Esc-cancel any command sooner.
 
     🔐 Vault substitution: if the command contains placeholders like
     ``{{secret:<handle>}}`` or ``{{value:<handle>}}``, the shell tool
@@ -51,6 +69,19 @@ async def shell(command: str) -> str:
     never enters your message history. Missing handles are left as-is
     so the failure is visible in the command output.
     """
+    default = settings.shell_timeout
+    limit = int(timeout) if timeout is not None else default
+    if limit <= 0:
+        return f"Error: timeout must be positive (got {limit})"
+    if limit > default and not (timeout_reason and timeout_reason.strip()):
+        # 🛑 transparency rule: any raise above the default must be
+        # justified so the user sees WHY before it runs
+        return (
+            f"Error: timeout={limit}s is above the default {default}s — "
+            "pass timeout_reason='...' explaining why (installs, builds, "
+            "downloads, long tests, etc.) so the user can see the "
+            "justification before it runs. Retry with a reason."
+        )
     from talos.infra.vault import substitute
 
     command, missing = substitute(command)
@@ -72,11 +103,11 @@ async def shell(command: str) -> str:
 
     try:
         stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), TIMEOUT_SECONDS
+            proc.communicate(), limit
         )
     except asyncio.TimeoutError:
         _kill_tree(proc.pid)
-        return f"Error: command timed out after {TIMEOUT_SECONDS}s"
+        return f"Error: command timed out after {limit}s"
     except asyncio.CancelledError:
         # ⛔ the user stopped the turn — take the command down with it
         _kill_tree(proc.pid)

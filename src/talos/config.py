@@ -126,6 +126,13 @@ class Settings(BaseSettings):
     #              but everything else runs fine.
     embedder: str = "auto"
 
+    # 🐚 Shell tool default timeout (seconds). The agent may pick a
+    # per-call timeout without limit, but MUST include a reason when
+    # asking for more than this — the reason renders in the tool-call
+    # preview so you see it before the command runs and can Esc-veto
+    # if the justification is thin. Esc-cancel kills at any time.
+    shell_timeout: int = 120
+
     # 🔐 MSAL / Microsoft Entra ID client-credentials auth (enterprise
     # gateways). When client_id + client_secret + tenant_id are ALL set,
     # Talos acquires its bearer token from Azure AD instead of using
