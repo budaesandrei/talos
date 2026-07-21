@@ -17,6 +17,9 @@ BUILTINS = {
     "/tools": "list the agent's tools",
     "/skills": "🎒 list skills the agent can load (local + linked)",
     "/mcp": "🔌 list MCP servers (local + linked) and their tools",
+    "/agents": "🤖 list subagent definitions (.talos/agents)",
+    "/links": "🔗 show linked agent dirs and what they contribute",
+    "/config": "⚙️ show the effective configuration (API key masked)",
     "/memory": "show long-term memory",
     "/mermaid": "open mermaid diagrams from the last reply in the browser",
     "/usage": "show token usage (session + all-time)",
@@ -25,6 +28,8 @@ BUILTINS = {
     "/learn": "🧪 distill the last task into a reusable skill (verified)",
     "/init": "🗂️ survey the project and write a starter TALOS.md",
     "/rewind": "⏪ jump back to a checkpoint (chat/files/both)",
+    "/sessions": "🗂 list saved sessions (add 'all' for every project)",
+    "/resume": "🔁 switch to a saved session: /resume <id | latest | words>",
     "/models": "list the provider's models, switch the active one",
     "/plan": "🗺️ plan before doing: /plan <task> (AI-DLC style)",
     "/evolve": "🔄 lifecycle loop: debt → persona research → requirements → plan",
@@ -93,6 +98,10 @@ def dispatch(line: str) -> tuple[str, str]:
         return "builtin", "/exit"
     if name == "/plan":
         return "plan", args.strip()
+    if name == "/resume":
+        return "resume", args.strip()
+    if name == "/sessions":
+        return "sessions", args.strip()
     if name == "/evolve":
         return "evolve", args.strip()
     if name in BUILTINS:

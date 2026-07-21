@@ -388,6 +388,10 @@ class Runtime:
             approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
         )
+        # 🔁 in-session resume: the resume_session tool (or /resume) parks
+        # a target here; the repl performs the swap once the turn ends
+        self._pending_resume: str | None = None
+        self._extra_tools.append(self._make_resume_tool())
         self._rebuild_graph()
         # 💾 Either continue an old session or start a new one.
         # `resume` is one of: "latest", an exact session id, or a natural-
@@ -424,6 +428,57 @@ class Runtime:
             set_session(self.session_id)
         except Exception:
             pass
+
+    def _make_resume_tool(self):
+        """🔁 A Runtime-bound tool so 'can we pick up the graph discussion
+        from yesterday?' works in plain conversation: the model finds the
+        session (search_sessions) and calls this to switch to it."""
+        from langchain_core.tools import tool
+
+        rt = self
+
+        @tool
+        def resume_session(session: str) -> str:
+            """Switch the CURRENT chat to a previously saved session — the
+            in-place equivalent of restarting with `talos chat -r`.
+            `session` is a session id (get it from search_sessions or
+            list_sessions), or 'latest', or a natural-language description
+            of the conversation. The switch happens right after this turn
+            ends: the resumed history replaces the current one (the current
+            session remains saved and can be resumed back later). After
+            calling, tell the user the switch is queued and STOP — do not
+            continue working."""
+            rt._pending_resume = session
+            return (
+                f"Switch queued: the chat will move to the session matching "
+                f"{session!r} as soon as this turn ends. Tell the user and stop."
+            )
+
+        return resume_session
+
+    def switch_session(self, resume: str) -> str:
+        """🔁 Swap the live conversation for a saved one. The current
+        session is saved turn-by-turn already, so nothing is lost; the
+        exchange that requested the switch stays in the OLD session (no
+        history merge — same semantics as exit + `talos chat -r`)."""
+        session_id = _resolve_resume(resume)  # exact id, latest, or search
+        messages = load_session(session_id)
+        self.session_id = session_id
+        self.messages = messages
+        self._close_dangling_tool_calls()
+        meta = get_session_meta(session_id)
+        self.title = meta.get("title", "")
+        self.usage = meta.get("usage") or {
+            "input": 0, "output": 0, "total": 0, "turns": 0
+        }
+        self.context_tokens = 0  # re-measured on the next reply
+        try:
+            from talos.tools.recall_tool import set_session
+
+            set_session(session_id)
+        except Exception:
+            pass
+        return session_id
 
     def _rebuild_graph(self) -> None:
         self.graph = build_agent_graph(
@@ -1122,6 +1177,34 @@ class Runtime:
             self._activity.append(f"{msg.name} → {first[:100]}")
 
 
+def _print_sessions(rt: "Runtime", scope: str = "here") -> None:
+    """🗂 /sessions — the saved-session list, right in the chat. Pairs
+    with /resume: read an id here, switch to it there (or just ask the
+    agent, which has search_sessions for semantic lookup)."""
+    from talos.memory.sessions import list_sessions
+
+    found = list_sessions(project="all" if scope == "all" else "here")
+    if not found:
+        console.print("[dim]no saved sessions"
+                      + (" for this project — try /sessions all[/]"
+                         if scope != "all" else "[/]"))
+        return
+    table = Table(title=f"🗂 sessions ({'all projects' if scope == 'all' else 'this project'})")
+    table.add_column("id", style="cyan")
+    table.add_column("title")
+    table.add_column("msgs", justify="right", style="dim")
+    for s in sorted(found, key=lambda x: x["id"], reverse=True)[:20]:
+        is_current = s["id"] == rt.session_id
+        table.add_row(
+            s["id"] + (" [magenta]← current[/]" if is_current else ""),
+            s["title"] or "[dim]…[/]",
+            str(s["messages"]),
+        )
+    console.print(table)
+    console.print("[dim]🔁 /resume <id> switches to one · newest 20 shown · "
+                  "`talos sessions search <words>` for semantic lookup[/]")
+
+
 async def _gather_mcp_tools() -> list:
     try:
         # per-server progress lines — startup must never be a silent hang
@@ -1484,6 +1567,13 @@ async def repl(
         if action == "plan":
             await run_plan(rt, pump, payload)
             return True
+        if action == "resume":
+            # 🔁 deterministic human path — no LLM involved
+            rt._pending_resume = payload or "latest"
+            return True
+        if action == "sessions":
+            _print_sessions(rt, scope=payload or "here")
+            return True
         if action == "evolve":
             await run_evolve(rt, pump, payload)
             return True
@@ -1533,6 +1623,25 @@ async def repl(
         await run_turn(initial_prompt)
 
     while True:
+        # 🔁 a queued session switch (resume_session tool or /resume) is
+        # honored between turns — never mid-turn, so the turn machinery
+        # always writes into the session it started with
+        if rt._pending_resume:
+            target, rt._pending_resume = rt._pending_resume, None
+            try:
+                sid = await asyncio.to_thread(rt.switch_session, target)
+            except FileNotFoundError as exc:
+                console.print(f"[red]🔁 {exc}[/]")
+            else:
+                console.print(
+                    f"[bold #c97f2e]🔁 resumed session {sid}[/]"
+                    + (f"  [dim]{rt.title}[/]" if rt.title else "")
+                )
+                n = reprint_history(rt)
+                console.print(f"[dim]🖨️ {n} message(s) reprinted — pick up "
+                              "where you left off[/]")
+            continue
+
         # 📨 first, anything the user queued while the agent was busy
         if rt.inbox:
             note = rt.inbox.pop(0)
@@ -1666,6 +1775,67 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
             else:
                 console.print("[dim](no MCP tools connected this session — "
                               "servers are read at launch)[/]")
+    elif name == "/agents":
+        from talos.integrations.agents import discover_agents
+
+        found = discover_agents()
+        if not found:
+            console.print("[dim]no subagents — create .talos/agents/<name>.md[/]")
+        else:
+            table = Table(title="🤖 subagents")
+            table.add_column("name", style="cyan")
+            table.add_column("description")
+            table.add_column("tools", style="dim")
+            for a in found:
+                table.add_row(a.name, a.description,
+                              ", ".join(a.tools) or "(default read-only)")
+            console.print(table)
+    elif name == "/links":
+        from talos.integrations.linking import (
+            discover_linked_mcp, discover_linked_skills, load_links,
+        )
+
+        linked = load_links()
+        if not linked:
+            console.print("[dim]no links — try: talos link ~/.kiro[/]")
+        else:
+            for p in linked:
+                console.print(f"  🔗 [cyan]{p}[/]")
+            sk, mc = discover_linked_skills(), discover_linked_mcp()
+            console.print(f"[dim]→ {len(sk)} skill(s), {len(mc)} MCP server(s) "
+                          "(deduped by name, first link wins) — linking/unlinking "
+                          "is CLI-only: talos link/unlink[/]")
+    elif name == "/config":
+        key = settings.api_key
+        masked = (key[:7] + "…" + key[-4:] if len(key) > 14
+                  else ("<unset>" if not key else "•••"))
+        from talos.config import parse_extra_headers
+        from talos.integrations.msal_auth import msal_enabled
+
+        table = Table(title="⚙️ configuration", show_header=False, box=None,
+                      padding=(0, 2))
+        table.add_column("setting", style="cyan")
+        table.add_column("value")
+        rows = [
+            ("base_url", settings.base_url or "<default — api.openai.com>"),
+            ("auth", "🔐 MSAL client-credentials" if msal_enabled()
+                     else f"api key {masked}"),
+            ("model", rt.model_name),
+            ("temperature", str(settings.temperature)),
+            ("max_iterations", str(settings.max_iterations)),
+            ("markdown", str(settings.markdown)),
+            ("think", str(settings.think)),
+            ("prompt_cache", settings.prompt_cache),
+            ("stream_usage", str(settings.stream_usage)),
+            ("mcp_timeout", f"{settings.mcp_timeout:.0f}s"),
+            ("extra_headers", ", ".join(sorted(parse_extra_headers())) or "<none>"),
+            ("sandbox", settings.sandbox),
+            ("yolo", str(settings.yolo)),
+        ]
+        for k, v in rows:
+            table.add_row(k, v)
+        console.print(Panel(table, border_style="dim", title="⚙️ config",
+                            title_align="left"))
     elif name == "/memory":
         from talos.memory.notes import load_memory
 
