@@ -58,8 +58,20 @@ def _application():
     return _app
 
 
-def get_token() -> str:
-    """A currently-valid access token (cached by MSAL, renewed as needed)."""
+def get_token(force_refresh: bool = False) -> str:
+    """A currently-valid access token.
+
+    MSAL caches the token internally and auto-renews when its own copy is
+    about to expire — so idle-then-active flows work without help. But
+    when the *gateway* rejects a still-valid token (its own SSO session
+    ended, config changed, nonce rotated), we need to bypass the cache
+    and force Azure AD to mint a new one. ``force_refresh=True`` does
+    exactly that by dropping the MSAL app and rebuilding, which throws
+    away the cached token."""
+    global _app
+    if force_refresh:
+        with _lock:
+            _app = None
     scope = settings.msal_scope or f"api://{settings.msal_client_id}/.default"
     result = _application().acquire_token_for_client(scopes=[scope])
     if "access_token" not in result:

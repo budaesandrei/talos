@@ -20,17 +20,31 @@ from talos.config import parse_extra_headers, settings
 
 
 class _BearerTokenAuth(httpx.Auth):
-    """🔐 Refresh-per-request bearer auth (MSAL). The token getter is
-    cheap — MSAL caches until near expiry — and setting the header at
-    send time overrides the static api_key the OpenAI SDK put there,
-    so long sessions never ride an expired token."""
+    """🔐 Refresh-per-request bearer auth (MSAL) with 401 retry.
+
+    Setting the header at send time overrides the static api_key the
+    OpenAI SDK put there. The token getter is cheap — MSAL caches until
+    near expiry — so long-lived sessions never ride an expired token.
+
+    On a 401, we retry ONCE with a forced-refresh token: covers the
+    case where the token was fresh when we sent it but the gateway
+    rejected it for reasons of its own (SSO session ended, nonce
+    rotated, app config changed). One retry, not a loop — a genuinely
+    unauthorized caller must still fail visibly."""
+
+    requires_response_body = False
 
     def __init__(self, get_token):
         self._get_token = get_token
 
     def auth_flow(self, request):
         request.headers["Authorization"] = f"Bearer {self._get_token()}"
-        yield request
+        response = yield request
+        if response.status_code == 401:
+            request.headers["Authorization"] = (
+                f"Bearer {self._get_token(force_refresh=True)}"
+            )
+            yield request
 
 
 def _client_kwargs() -> dict:
