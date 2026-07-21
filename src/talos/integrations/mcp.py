@@ -48,14 +48,27 @@ def load_mcp_config() -> dict:
     return servers
 
 
+# keys the langchain-mcp-adapters connection constructors actually accept.
+# Other agents' configs carry extra fields (Kiro: "disabled", "autoApprove";
+# Cursor: "type"; …) that would blow up as unexpected kwargs — strip them.
+_ADAPTER_KEYS = {
+    "transport", "command", "args", "env", "cwd",
+    "encoding", "encoding_error_handler",
+    "url", "headers", "timeout", "sse_read_timeout",
+}
+
+
 def _to_adapter_config(servers: dict) -> dict:
-    """Fill in the transport field the adapter needs."""
+    """Fill in the transport field the adapter needs, drop foreign keys,
+    and honor a server's own disabled flag (Kiro-style)."""
     out = {}
     for name, spec in servers.items():
         spec = dict(spec)
+        if spec.get("disabled") is True:
+            continue  # 🔇 disabled in the source agent stays disabled here
         if "transport" not in spec:
             spec["transport"] = "stdio" if "command" in spec else "streamable_http"
-        out[name] = spec
+        out[name] = {k: v for k, v in spec.items() if k in _ADAPTER_KEYS}
     return out
 
 
