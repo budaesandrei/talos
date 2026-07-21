@@ -1577,6 +1577,50 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
     elif name == "/tools":
         for t in get_tools():
             console.print(f"  {TOOL_EMOJI.get(t.name, '🔧')} [cyan]{t.name}[/] — {t.description.splitlines()[0]}")
+    elif name == "/skills":
+        from talos.lifecycle.skills import discover_skills
+
+        found = discover_skills()
+        if not found:
+            console.print("[dim]no skills — create .talos/skills/<name>/SKILL.md "
+                          "or link an agent dir (talos link ~/.kiro)[/]")
+        else:
+            table = Table(title="🎒 skills (the model loads them on demand)")
+            table.add_column("name", style="cyan")
+            table.add_column("description")
+            for s in found:
+                # linked skills carry a "(via kiro)" tag in the description
+                table.add_row(s.name, s.description)
+            console.print(table)
+    elif name == "/mcp":
+        from talos.integrations.mcp import load_mcp_config, mcp_config_file
+
+        try:
+            servers = load_mcp_config()
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            return
+        if not servers:
+            console.print(f"[dim]no MCP servers — create {mcp_config_file()} "
+                          "or link an agent dir (talos link ~/.kiro)[/]")
+        else:
+            for sname, spec in servers.items():
+                target = spec.get("command", spec.get("url", "?"))
+                console.print(f"  🔌 [cyan]{sname}[/] → {target}")
+            # the tools were connected at startup and live in the graph
+            extras = rt._extra_tools
+            if extras:
+                table = Table(title="🔌 MCP tools (connected this session)")
+                table.add_column("tool", style="cyan")
+                table.add_column("description")
+                for t in extras:
+                    table.add_row(
+                        t.name, (t.description or "").splitlines()[0][:80]
+                    )
+                console.print(table)
+            else:
+                console.print("[dim](no MCP tools connected this session — "
+                              "servers are read at launch)[/]")
     elif name == "/memory":
         from talos.memory.notes import load_memory
 

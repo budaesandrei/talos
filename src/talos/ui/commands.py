@@ -15,6 +15,8 @@ BUILTINS = {
     "/help": "show this help",
     "/clear": "forget the conversation so far",
     "/tools": "list the agent's tools",
+    "/skills": "🎒 list skills the agent can load (local + linked)",
+    "/mcp": "🔌 list MCP servers (local + linked) and their tools",
     "/memory": "show long-term memory",
     "/mermaid": "open mermaid diagrams from the last reply in the browser",
     "/usage": "show token usage (session + all-time)",
