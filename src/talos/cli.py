@@ -273,7 +273,9 @@ def mcp() -> None:
         target = spec.get("command", spec.get("url", "?"))
         console.print(f"  [cyan]{name}[/] → {target}")
     try:
-        tools = asyncio.run(load_mcp_tools())
+        tools = asyncio.run(load_mcp_tools(
+            on_status=lambda m: console.print(f"[dim]{m}[/]")
+        ))
     except (RuntimeError, ValueError) as exc:
         console.print(f"[yellow]{exc}[/]")
         return

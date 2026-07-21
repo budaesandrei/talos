@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     # line in the terminal shows the same to you.
     gap_minutes: int = 30
 
+    # 🔌 Per-server MCP connection timeout (seconds) at launch. A hanging
+    # server (missing command, npx waiting on a prompt, dead URL) is
+    # skipped with a warning instead of freezing `talos chat` forever.
+    mcp_timeout: float = 15.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

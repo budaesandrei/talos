@@ -1088,7 +1088,10 @@ class Runtime:
 
 async def _gather_mcp_tools() -> list:
     try:
-        tools = await load_mcp_tools()
+        # per-server progress lines — startup must never be a silent hang
+        tools = await load_mcp_tools(
+            on_status=lambda m: console.print(f"[dim]{m}[/]")
+        )
     except (RuntimeError, ValueError) as exc:
         console.print(f"[yellow]🔌 MCP: {exc}[/]")
         return []

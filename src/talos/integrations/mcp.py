@@ -21,6 +21,7 @@ tools are not read-only-listed, so they require approval) treats them
 exactly like built-ins.
 """
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -72,8 +73,15 @@ def _to_adapter_config(servers: dict) -> dict:
     return out
 
 
-async def load_mcp_tools() -> list:
-    """Connect to every configured server and return their tools."""
+async def load_mcp_tools(timeout: float | None = None, on_status=None) -> list:
+    """Connect to every configured server and return their tools.
+
+    Servers connect CONCURRENTLY, each under its own timeout — one broken
+    or hanging server (a command that isn't installed, an npx waiting on a
+    prompt, a dead URL) skips with a warning instead of freezing launch.
+    ``on_status``: optional callable for progress lines, so startup is
+    never a silent hang.
+    """
     servers = load_mcp_config()
     if not servers:
         return []
@@ -85,5 +93,36 @@ async def load_mcp_tools() -> list:
             "run: pip install 'talos[mcp]'"
         ) from exc
 
-    client = MultiServerMCPClient(_to_adapter_config(servers))
-    return await client.get_tools()
+    cfg = _to_adapter_config(servers)
+    if not cfg:
+        return []
+    if timeout is None:
+        from talos.config import settings
+
+        timeout = settings.mcp_timeout
+    say = on_status or (lambda _msg: None)
+    say(f"🔌 connecting {len(cfg)} MCP server(s)… "
+        f"(per-server timeout {timeout:.0f}s)")
+    client = MultiServerMCPClient(cfg)
+
+    async def one(name: str):
+        try:
+            tools = await asyncio.wait_for(
+                client.get_tools(server_name=name), timeout
+            )
+            return tools, None
+        except asyncio.TimeoutError:
+            return [], f"timed out after {timeout:.0f}s"
+        except Exception as exc:  # noqa: BLE001 — a broken server must
+            # never take the session down with it
+            return [], f"{type(exc).__name__}: {str(exc)[:120]}"
+
+    results = await asyncio.gather(*(one(n) for n in cfg))
+    tools: list = []
+    for name, (server_tools, err) in zip(cfg, results):
+        if err:
+            say(f"⚠️  {name}: {err} — skipped")
+        else:
+            say(f"🔌 {name}: {len(server_tools)} tool(s)")
+            tools.extend(server_tools)
+    return tools
