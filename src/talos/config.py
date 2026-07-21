@@ -10,6 +10,7 @@ The ``TALOS_`` prefix is stripped automatically, so ``TALOS_MODEL`` in the
 environment becomes ``settings.model`` in code.
 """
 
+import json
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -102,6 +103,40 @@ class Settings(BaseSettings):
     # skipped with a warning instead of freezing `talos chat` forever.
     mcp_timeout: float = 15.0
 
+    # 📊 Ask for a usage block on STREAMED responses (OpenAI's
+    # stream_options.include_usage). Without it, strict OpenAI-compatible
+    # endpoints stream zero usage — token/cost tracking (and 💾 cache-hit
+    # accounting) silently reads 0. Providers that always stream usage
+    # (Anthropic, LiteLLM) are unaffected. Disable only if a quirky
+    # gateway 400s on stream_options.
+    stream_usage: bool = True
+
+    # 💾 Prompt-cache breakpoints (Anthropic cache_control). "auto" adds
+    # markers for Anthropic-family models (their caching is opt-in; the
+    # ReAct loop re-bills the whole prefix every step without them) and
+    # skips OpenAI-family (automatic server-side). "on" forces markers,
+    # "off" disables.
+    prompt_cache: str = "auto"
+
+    # 🔐 MSAL / Microsoft Entra ID client-credentials auth (enterprise
+    # gateways). When client_id + client_secret + tenant_id are ALL set,
+    # Talos acquires its bearer token from Azure AD instead of using
+    # TALOS_API_KEY, and MSAL renews it automatically before expiry.
+    # Requires: pip install -e ".[msal]"
+    msal_client_id: str | None = None
+    msal_client_secret: str | None = None
+    msal_tenant_id: str | None = None
+    # token scope; default is api://{client_id}/.default — most custom
+    # gateway app registrations. Override e.g. TALOS_MSAL_SCOPE=
+    # "https://cognitiveservices.azure.com/.default" for Azure OpenAI.
+    msal_scope: str | None = None
+
+    # 🏷️ Extra HTTP headers sent on every LLM + /models request. Common
+    # enterprise-gateway requirement (routing/chargeback headers).
+    # JSON:  TALOS_EXTRA_HEADERS={"X-MODULE": "app"}
+    # or:    TALOS_EXTRA_HEADERS=X-MODULE: app, X-Env: prod
+    extra_headers: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -113,3 +148,24 @@ class Settings(BaseSettings):
 # A single shared instance, imported everywhere else as
 # ``from talos.config import settings``.
 settings = Settings()
+
+
+def parse_extra_headers() -> dict[str, str]:
+    """🏷️ TALOS_EXTRA_HEADERS as a dict. Accepts a JSON object or a
+    comma-separated "Key: value" list; empty/unset → {}."""
+    raw = (settings.extra_headers or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except json.JSONDecodeError:
+        pass
+    out: dict[str, str] = {}
+    for part in raw.split(","):
+        if ":" in part:
+            key, value = part.split(":", 1)
+            if key.strip():
+                out[key.strip()] = value.strip()
+    return out

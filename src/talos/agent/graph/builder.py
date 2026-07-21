@@ -48,10 +48,17 @@ def build_agent_graph(
 
     async def agent_node(state: AgentState) -> dict:
         """🧠 Think: one LLM call over the full conversation."""
+        messages = [SystemMessage(content=system_prompt), *state.messages]
+        # 💾 Anthropic-style models cache nothing unless we mark
+        # breakpoints — and the ReAct loop re-bills the whole prefix on
+        # every think→act step, so this is the biggest cost lever we
+        # have. No-op for OpenAI-family (automatic server-side caching).
+        from talos.agent.caching import add_cache_breakpoints, cache_enabled
+
+        if cache_enabled(getattr(llm, "model_name", "") or ""):
+            messages = add_cache_breakpoints(messages)
         with span("gen_ai.chat", **{"gen_ai.operation.name": "chat"}) as s:
-            response = await llm_with_tools.ainvoke(
-                [SystemMessage(content=system_prompt), *state.messages]
-            )
+            response = await llm_with_tools.ainvoke(messages)
             um = getattr(response, "usage_metadata", None) or {}
             set_span_attrs(
                 s,

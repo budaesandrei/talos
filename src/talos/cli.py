@@ -302,6 +302,7 @@ def models() -> None:
     table.add_column("ctx", justify="right")
     table.add_column("$/M in", justify="right")
     table.add_column("$/M out", justify="right")
+    table.add_column("💾$/M read", justify="right")
     table.add_column("👁", justify="center")
     for m in found:
         table.add_row(
@@ -309,6 +310,7 @@ def models() -> None:
             f"{m.context:,}" if m.context else "·",
             f"{m.input_per_m:.2f}" if m.input_per_m is not None else "·",
             f"{m.output_per_m:.2f}" if m.output_per_m is not None else "·",
+            f"{m.cache_read_per_m:.2f}" if m.cache_read_per_m is not None else "·",
             "👁" if m.vision else "·",
         )
     console.print(table)

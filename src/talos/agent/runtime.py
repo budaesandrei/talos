@@ -439,9 +439,36 @@ class Runtime:
         self.model_name = model_id
         self._rebuild_graph()
         console.print(f"[dim]📇 switched to [magenta]{model_id}[/][/]")
+        self.report_cache_pricing()
+
+    def report_cache_pricing(self) -> None:
+        """💾 One dim line when the provider prices prompt caching for the
+        active model. Cached tokens are tracked either way; this tells you
+        the discount is real and what the rates are."""
+        try:
+            from talos.integrations.models import cache_prices
+
+            read, write = cache_prices(self.model_name)
+        except Exception:
+            return
+        if read is None and write is None:
+            return
+        bits = []
+        if read is not None:
+            bits.append(f"read ${read * 1e6:.2f}/M")
+        if write is not None:
+            bits.append(f"write ${write * 1e6:.2f}/M")
+        console.print(
+            f"[dim]💾 prompt-cache pricing detected: {' · '.join(bits)} — "
+            "cache hits are billed at the discounted rate[/]"
+        )
 
     def session_cost(self) -> float | None:
-        return estimate_cost(self.model_name, self.usage["input"], self.usage["output"])
+        return estimate_cost(
+            self.model_name, self.usage["input"], self.usage["output"],
+            cache_read=self.usage.get("cache_read", 0),
+            cache_creation=self.usage.get("cache_creation", 0),
+        )
 
     def context_limit(self) -> int | None:
         from talos.integrations.models import provider_meta, lookup
@@ -590,7 +617,8 @@ class Runtime:
 
     # ── 💬 one user turn ─────────────────────────────────────────────────
     async def turn(self, user_input: str) -> str:
-        self._turn_usage = {"input": 0, "output": 0, "total": 0}
+        self._turn_usage = {"input": 0, "output": 0, "total": 0,
+                            "cache_read": 0, "cache_creation": 0}
         self.usage["turns"] += 1
         self.stop_flag.clear()
         await self.maybe_compact()  # 🗜️ keep us under the context limit
@@ -1063,6 +1091,14 @@ class Runtime:
             amount = um.get(theirs) or 0
             self._turn_usage[ours] += amount
             self.usage[ours] += amount
+        # 💾 cached slices of the input (LangChain normalizes provider
+        # cache counts into input_token_details) — feeds the discounted
+        # cost estimate and the /usage cache column
+        details = um.get("input_token_details") or {}
+        for key in ("cache_read", "cache_creation"):
+            amount = details.get(key) or 0
+            self._turn_usage[key] = self._turn_usage.get(key, 0) + amount
+            self.usage[key] = self.usage.get(key, 0) + amount
 
     # ── 🔧 render tool activity ──────────────────────────────────────────
     def _render_side_effects(self, msg: BaseMessage) -> None:
@@ -1364,12 +1400,18 @@ async def repl(
     # ⚠️ no credentials configured → the model name shown is just the
     # default; a real request would 401. Tell the user plainly rather than
     # letting them think gpt-4o-mini is wired up.
-    if not settings.api_key:
+    from talos.integrations.msal_auth import msal_enabled
+
+    if not settings.api_key and not msal_enabled():
         console.print(
-            "[yellow]⚠️  no API key configured[/] — set TALOS_API_KEY (+ "
-            "TALOS_BASE_URL / TALOS_MODEL) in .env or your environment. "
+            "[yellow]⚠️  no credentials configured[/] — set TALOS_API_KEY, "
+            "or TALOS_MSAL_CLIENT_ID / _CLIENT_SECRET / _TENANT_ID for "
+            "Entra ID auth, in .env or your environment. "
             f"[dim]showing the default model '{rt.model_name}'.[/]"
         )
+    elif msal_enabled():
+        console.print("[dim]🔐 auth: MSAL client-credentials "
+                      f"(tenant {settings.msal_tenant_id})[/]")
 
     # 🔥 warm /models in the background: one round trip gives the picker
     # its list AND the cost engine the provider's own per-token prices
@@ -1656,16 +1698,21 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         table.add_column("↑ in", justify="right")
         table.add_column("↓ out", justify="right")
         table.add_column("total", justify="right", style="bold cyan")
+        table.add_column("💾 cached", justify="right")
         table.add_column("cost", justify="right", style="green")
+        cached = u.get("cache_read", 0)
+        hit = f" ({cached / u['input']:.0%})" if cached and u["input"] else ""
         table.add_row(
             "this session", str(u["turns"]), f"{u['input']:,}",
             f"{u['output']:,}", f"{u['total']:,}",
+            f"{cached:,}{hit}" if cached else "·",
             f"${cost:.3f}" if cost is not None else "·",
         )
         table.add_row(
             "[dim]all time[/]", f"[dim]{a['turns']}[/]",
             f"[dim]{a['input']:,}[/]", f"[dim]{a['output']:,}[/]",
             f"[dim]{a['total']:,}[/]",
+            f"[dim]{a.get('cache_read', 0):,}[/]" if a.get("cache_read") else "·",
             f"[dim]${a['cost']:.3f}[/]" if a.get("cost") else "·",
         )
         console.print(Panel(table, title="📊 usage", border_style="dim",
@@ -1705,6 +1752,7 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         table.add_column("ctx", justify="right")
         table.add_column("$/M in", justify="right")
         table.add_column("$/M out", justify="right")
+        table.add_column("💾$/M read", justify="right")
         table.add_column("👁", justify="center")
         for i, m in enumerate(found, 1):
             table.add_row(
@@ -1713,11 +1761,13 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
                 f"{m.context:,}" if m.context else "·",
                 f"{m.input_per_m:.2f}" if m.input_per_m is not None else "·",
                 f"{m.output_per_m:.2f}" if m.output_per_m is not None else "·",
+                f"{m.cache_read_per_m:.2f}" if m.cache_read_per_m is not None else "·",
                 "👁" if m.vision else "·",
             )
         console.print(table)
         console.print(
-            "[dim]👁 = vision/multimodal · pricing from provider metadata or "
+            "[dim]👁 = vision/multimodal · 💾 = prompt-cache read price "
+            "(cache supported) · pricing from provider metadata or "
             "LiteLLM's community db · blank = unknown[/]"
         )
         if pump is None:

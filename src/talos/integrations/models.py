@@ -57,6 +57,9 @@ class ModelInfo(BaseModel):
     input_per_m: float | None = None  # $ per 1M input tokens
     output_per_m: float | None = None
     vision: bool | None = None        # multimodal (image input)?
+    # 💾 prompt caching, when the provider prices it (LiteLLM-style fields)
+    cache_read_per_m: float | None = None
+    cache_creation_per_m: float | None = None
 
 
 def _price_db() -> dict:
@@ -105,6 +108,7 @@ def _entry_meta(entry: dict) -> dict:
     info = {**(entry.get("model_info") or {}), **entry}
     out = {}
     for key in ("input_cost_per_token", "output_cost_per_token",
+                "cache_read_input_token_cost", "cache_creation_input_token_cost",
                 "max_input_tokens", "supports_vision"):
         if info.get(key) is not None:
             out[key] = info[key]
@@ -174,9 +178,24 @@ def parse_models(payload, db: dict | None = None) -> list[ModelInfo]:
                 input_per_m=per_m("input_cost_per_token"),
                 output_per_m=per_m("output_cost_per_token"),
                 vision=vision,
+                cache_read_per_m=per_m("cache_read_input_token_cost"),
+                cache_creation_per_m=per_m("cache_creation_input_token_cost"),
             )
         )
     return out
+
+
+def _request_headers() -> dict:
+    """Authorization (api key, or a 🔐 MSAL token when configured) plus
+    🏷️ enterprise extra headers — same identity the chat calls use."""
+    from talos.config import parse_extra_headers
+    from talos.integrations.msal_auth import get_token, msal_enabled
+
+    headers = {"Authorization": f"Bearer {settings.api_key}"}
+    if msal_enabled():
+        headers["Authorization"] = f"Bearer {get_token()}"
+    headers.update(parse_extra_headers())
+    return headers
 
 
 def list_models(refresh: bool = False) -> list[ModelInfo]:
@@ -189,7 +208,7 @@ def list_models(refresh: bool = False) -> list[ModelInfo]:
     base = (settings.base_url or "https://api.openai.com/v1").rstrip("/")
     resp = httpx.get(
         f"{base}/models",
-        headers={"Authorization": f"Bearer {settings.api_key}"},
+        headers=_request_headers(),
         timeout=_HTTP_TIMEOUT,
         verify=settings.verify_ssl,
     )
@@ -220,7 +239,25 @@ def prime_models_cache() -> int:
         return 0
 
 
-def estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float | None:
+def cache_prices(model_id: str) -> tuple[float | None, float | None]:
+    """💾 ($/token cache-read, $/token cache-write) for the model, or
+    (None, None) when the provider/db doesn't price prompt caching."""
+    meta = {**lookup(model_id), **provider_meta(model_id)}
+    cr = meta.get("cache_read_input_token_cost")
+    cc = meta.get("cache_creation_input_token_cost")
+    return (
+        float(cr) if cr is not None else None,
+        float(cc) if cc is not None else None,
+    )
+
+
+def estimate_cost(
+    model_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int = 0,
+    cache_creation: int = 0,
+) -> float | None:
     """Dollars for this many tokens. Pricing priority:
 
     1. the provider's own /models metadata (your enterprise prices)
@@ -228,9 +265,26 @@ def estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float
     3. unknown → None (the UI hides cost rather than guessing)
 
     If only one side is priced, the other coalesces to 0.
+
+    💾 ``cache_read`` / ``cache_creation`` are the cached slices of
+    ``input_tokens`` (LangChain's usage_metadata.input_token_details).
+    They're billed at the cache rates WHEN the provider prices them;
+    without cache pricing they stay billed at the full input rate — a
+    conservative estimate rather than a wrong discount.
     """
-    meta = provider_meta(model_id) or lookup(model_id)
+    meta = {**lookup(model_id), **provider_meta(model_id)}
     cin, cout = meta.get("input_cost_per_token"), meta.get("output_cost_per_token")
     if cin is None and cout is None:
         return None
-    return input_tokens * float(cin or 0) + output_tokens * float(cout or 0)
+    cr_price = meta.get("cache_read_input_token_cost")
+    cc_price = meta.get("cache_creation_input_token_cost")
+    uncached = input_tokens
+    cost = 0.0
+    if cache_read and cr_price is not None:
+        cost += cache_read * float(cr_price)
+        uncached -= cache_read
+    if cache_creation and cc_price is not None:
+        cost += cache_creation * float(cc_price)
+        uncached -= cache_creation
+    return (cost + max(uncached, 0) * float(cin or 0)
+            + output_tokens * float(cout or 0))
