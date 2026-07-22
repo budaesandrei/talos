@@ -1193,12 +1193,26 @@ def _print_sessions(rt: "Runtime", scope: str = "here") -> None:
     table.add_column("id", style="cyan")
     table.add_column("title")
     table.add_column("msgs", justify="right", style="dim")
-    for s in sorted(found, key=lambda x: x["id"], reverse=True)[:20]:
+    table.add_column("last active", style="dim")
+    # 🕒 sort by last-active (matches what `-r latest` picks), not id;
+    # a session resumed today after months of idle should rank first
+    from datetime import datetime as _dt
+
+    now = _dt.now().timestamp()
+    def _ago(ts: float) -> str:
+        d = max(0, int(now - ts))
+        if d < 60:      return f"{d}s ago"
+        if d < 3600:    return f"{d // 60}m ago"
+        if d < 86400:   return f"{d // 3600}h ago"
+        return f"{d // 86400}d ago"
+
+    for s in sorted(found, key=lambda x: x.get("last_active", 0), reverse=True)[:20]:
         is_current = s["id"] == rt.session_id
         table.add_row(
             s["id"] + (" [magenta]← current[/]" if is_current else ""),
             s["title"] or "[dim]…[/]",
             str(s["messages"]),
+            _ago(s.get("last_active", 0)),
         )
     console.print(table)
     console.print("[dim]🔁 /resume <id> switches to one · newest 20 shown · "

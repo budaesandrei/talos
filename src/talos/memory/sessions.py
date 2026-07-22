@@ -133,9 +133,17 @@ def _session_files(d: Path) -> list[Path]:
 
 
 def latest_session_id() -> str | None:
+    """The session most recently *touched* (last save), not the most
+    recently created. save_session() writes every turn, so file mtime =
+    "last active". This is why resuming a 2-month-old session, chatting,
+    then `-r latest` correctly returns to that older session — the
+    naive filename sort would have jumped back to a newer but idle one."""
     d = sessions_dir()
     files = _session_files(d) if d.is_dir() else []
-    return files[-1].stem if files else None
+    if not files:
+        return None
+    files.sort(key=lambda f: f.stat().st_mtime)
+    return files[-1].stem
 
 
 def list_sessions(project: str | None = "here") -> list[dict]:
@@ -169,6 +177,10 @@ def list_sessions(project: str | None = "here") -> list[dict]:
                 "messages": n,
                 "title": meta.get("title", ""),
                 "project_path": sess_project,
+                # 🕒 last-active timestamp: mtime is bumped by save_session,
+                # so this ranks resumed sessions correctly (id-only would
+                # bury a 2-month-old but freshly-chatted session)
+                "last_active": f.stat().st_mtime,
             }
         )
     return out
