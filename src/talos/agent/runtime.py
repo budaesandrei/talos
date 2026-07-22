@@ -384,6 +384,11 @@ class Runtime:
         self._activity: list[str] = []          # 🗣️ narrator's source material
         self._line_request: asyncio.Future | None = None  # approval waiting?
         self._turn_task = None      # ⎋ Esc targets this
+        # 📊 per-turn scratch usage — must be initialized here (not just in
+        # turn()) because /compact runs LLM calls outside any turn and
+        # _track_usage would otherwise AttributeError on this
+        self._turn_usage = {"input": 0, "output": 0, "total": 0,
+                            "cache_read": 0, "cache_creation": 0}
         self._gate = PermissionGate(
             approver=self._ask_permission if interactive else None,
             yolo=yolo or settings.yolo,
