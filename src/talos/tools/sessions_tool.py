@@ -32,18 +32,22 @@ def list_sessions_tool(scope: str = "here") -> str:
 @tool
 def search_sessions_tool(query: str, k: int = 5,
                           scope: str = "here") -> str:
-    """Semantic search across past chat sessions.
+    """Semantic search across OTHER chat sessions — for finding or
+    resuming a past conversation described in natural language.
+
+    For recalling something from the CURRENT conversation, use
+    ``recall_memory`` instead (with ``detailed=True`` if you need
+    verbatim IDs / URLs / exact strings).
 
     query: natural-language description of what you're looking for
     k: max number of session hits to return (default 5)
-    scope: "here" (current project) or "all" (every project)
+    scope: "here" (default — current project's sessions) or "all"
+      (every project)
 
     Returns ranked sessions as JSON: [{session_id, score, snippet,
-    role, project_path}]. Lower score = better match (L2 distance).
-
-    Use this when the user asks to find or resume a past conversation
-    described in natural language. Report the candidates with their ids
-    and snippets; ask the user which to resume rather than guessing.
+    role, project_path, title}]. Lower score = better match. Report
+    the candidates with their ids and snippets; ask the user which to
+    resume rather than guessing.
     """
     from talos.memory import sessions, sessions_kb
 
