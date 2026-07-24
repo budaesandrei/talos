@@ -133,6 +133,17 @@ class Settings(BaseSettings):
     # if the justification is thin. Esc-cancel kills at any time.
     shell_timeout: int = 120
 
+    # ⏱ Wall-clock timeout on a single LLM chat call (seconds). Without
+    # this, a gateway that stalls on a huge context OR the SDK's silent
+    # retries can freeze `talos chat` for minutes. When the limit trips,
+    # the request errors visibly and you can /rewind or /compact.
+    llm_timeout: float = 300.0
+
+    # 📊 Warn when a turn is about to send a payload above this fraction
+    # of the model's max_input_tokens (0–1). Gives you a chance to
+    # /compact before you hit the wall. Set to 0 to disable.
+    context_warn_at: float = 0.80
+
     # 🔐 MSAL / Microsoft Entra ID client-credentials auth (enterprise
     # gateways). When client_id + client_secret + tenant_id are ALL set,
     # Talos acquires its bearer token from Azure AD instead of using

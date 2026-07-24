@@ -87,6 +87,14 @@ def build_llm(model: str | None = None) -> ChatOpenAI:
         # zeros. Sends stream_options={"include_usage": true}; the usage
         # (incl. cached-token details) arrives on the final chunk.
         stream_usage=settings.stream_usage,
+        # ⏱ wall-clock timeout on the whole HTTP request (connect + read).
+        # Without it, a stalled gateway or a huge over-limit payload can
+        # freeze the REPL indefinitely — the SDK will silently retry
+        # network-looking errors, so "no output" is indistinguishable
+        # from "still working". With it, the call errors visibly.
+        timeout=settings.llm_timeout,
+        # ⛔ don't silently retry a hang either — one attempt, fail loud
+        max_retries=0,
         model=model or settings.model,
         api_key=settings.api_key or "not-set",  # local servers ignore it
         base_url=settings.base_url,

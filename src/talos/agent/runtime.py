@@ -599,6 +599,26 @@ class Runtime:
         self._track_usage(msg)
         return get_message_text(msg)
 
+    def _warn_if_near_context_limit(self) -> None:
+        """📊 Loud heads-up when the last reply's input_tokens crossed the
+        warn threshold but not the compact threshold — the model still
+        accepts payloads this big, but the next few turns might not.
+        Better a visible warning now than a silent hang later."""
+        limit = self.context_limit()
+        threshold = settings.context_warn_at
+        if not limit or threshold <= 0 or not self.context_tokens:
+            return
+        pct = self.context_tokens / limit
+        if pct < threshold or pct >= settings.compact_at:
+            # below threshold (fine) or above compact threshold (already
+            # compacted this turn — no point warning about it)
+            return
+        console.print(
+            f"[yellow]📊 context at {self.context_tokens:,} tokens "
+            f"({pct:.0%} of the model's {limit:,} limit) — /compact soon "
+            "or the next turn may hang on an over-limit payload[/]"
+        )
+
     async def maybe_compact(self, force: bool = False) -> bool:
         """🗜️ Fold old turns into a summary when context fills up.
         Returns True if a compaction happened."""
@@ -663,7 +683,8 @@ class Runtime:
                 title_align="left",
             )
         )
-        console.print(r"[yellow]allow? \[y]es · \[n]o · \[a]lways ›[/] ", end="")
+        # ⚠️ no end="" — the persistent prompt owns the bottom line
+        console.print(r"[yellow]allow? \[y]es · \[n]o · \[a]lways[/]")
         # park a Future; the run_turn interjection loop fulfils it with the
         # next line the user submits in the (always-alive) bottom prompt
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -682,6 +703,7 @@ class Runtime:
         self.usage["turns"] += 1
         self.stop_flag.clear()
         await self.maybe_compact()  # 🗜️ keep us under the context limit
+        self._warn_if_near_context_limit()
         self._activity = ["received the task, thinking"]
         # 👁 turn the text into multimodal content if it references images
         # and the model can see (otherwise this returns the plain string)
@@ -854,11 +876,27 @@ class Runtime:
         except Exception as exc:  # noqa: BLE001 — an API/network error must
             # never kill the session: history is saved below, so the user can
             # fix .env (expired key, SSL, …) and pick up where they left off.
-            console.print(f"\n[red]💥 {type(exc).__name__}:[/] {exc}")
-            console.print(
-                "[dim]conversation saved — fix the issue (e.g. refresh "
-                "TALOS_API_KEY in .env) then resume with: talos chat -r latest[/]"
+            name = type(exc).__name__
+            # ⏱ TALOS_LLM_TIMEOUT tripped or a socket timed out — call it
+            # out specifically because the fix is different (compact or
+            # rewind, not "check your key")
+            is_timeout = (
+                "Timeout" in name or "timeout" in str(exc).lower()
             )
+            console.print(f"\n[red]💥 {name}:[/] {exc}")
+            if is_timeout:
+                console.print(
+                    f"[yellow]⏱ LLM call exceeded TALOS_LLM_TIMEOUT "
+                    f"({settings.llm_timeout:.0f}s). Common causes on a "
+                    "long session: context near the model's limit, or a "
+                    "stalled gateway. Try /compact, or /rewind to a "
+                    "checkpoint from before the incident.[/]"
+                )
+            else:
+                console.print(
+                    "[dim]conversation saved — fix the issue (e.g. refresh "
+                    "TALOS_API_KEY in .env) then resume with: talos chat -r latest[/]"
+                )
         finally:
             # runs even on cancellation — history survives a forced stop
             close_stream()
@@ -938,7 +976,7 @@ class Runtime:
             return
         existing = Path("TALOS.md")
         if existing.is_file():
-            console.print(r"[yellow]TALOS.md exists — overwrite? \[y/N] ›[/] ", end="")
+            console.print(r"[yellow]TALOS.md exists — overwrite? \[y/N][/]")
             # handled inline only when a pump is around; default safe = skip
         Path("TALOS.md").write_text(content + "\n", encoding="utf-8")
         console.print("[green]🗂️ wrote TALOS.md — workspace rules for future "
@@ -1244,7 +1282,7 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
     from talos.tools.task_tool import _resolve_tools
 
     if not task:
-        console.print("[yellow]what should we plan? ›[/] ", end="")
+        console.print("[yellow]what should we plan?[/]")
         task = (await pump.queue.get() or "").strip()
         if not task:
             return
@@ -1281,7 +1319,7 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
         if is_ready(plan_text):
             break
         # ❓ mob elaboration: the planner asked questions — answer them
-        console.print("[yellow]answers (or 'skip' to force a plan) ›[/] ", end="")
+        console.print("[yellow]answers (or 'skip' to force a plan)[/]")
         answer = (await pump.queue.get() or "").strip()
         if answer.lower() == "skip":
             convo.append(HumanMessage(
@@ -1294,14 +1332,14 @@ async def run_plan(rt: Runtime, pump, task: str) -> None:
     console.print(f"[dim]🗺️ saved to {path}[/]")
 
     # 🚦 the human gate
-    console.print(r"[yellow]execute? \[y]es · \[r]evise · \[n]ot now ›[/] ", end="")
+    console.print(r"[yellow]execute? \[y]es · \[r]evise · \[n]ot now[/]")
     verdict = (await pump.queue.get() or "").strip().lower()
     if verdict.startswith("y"):
         # 🔨 construct phase = a normal turn: full tools, gate, interjections
         rt.inbox.insert(0, construct_prompt(plan_text))
         rt._pending_verify = plan_text  # 🔍 verify once construct finishes
     elif verdict.startswith("r"):
-        console.print("[yellow]what should change? ›[/] ", end="")
+        console.print("[yellow]what should change?[/]")
         note = (await pump.queue.get() or "").strip()
         rt.inbox.insert(0, f"/plan {task}\n(revision note: {note})")
     else:
@@ -1342,7 +1380,7 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     rt._track_usage(debt["messages"][-1])
     console.print(Panel(Markdown(debt_report), title="🧹 tech-debt report",
                         border_style="cyan"))
-    console.print(r"[yellow]continue to market/persona research? \[Y/n] ›[/] ", end="")
+    console.print(r"[yellow]continue to market/persona research? \[Y/n][/]")
     if (await pump.queue.get() or "y").strip().lower().startswith("n"):
         console.print("[dim]parked after debt phase[/]")
         return
@@ -1385,7 +1423,7 @@ async def run_evolve(rt: Runtime, pump, focus: str) -> None:
     except Exception:
         pass
 
-    console.print(r"[yellow]feed these into /plan now? \[Y/n] ›[/] ", end="")
+    console.print(r"[yellow]feed these into /plan now? \[Y/n][/]")
     if (await pump.queue.get() or "y").strip().lower().startswith("n"):
         console.print("[dim]requirements saved — run /plan when ready[/]")
         return
@@ -1718,20 +1756,34 @@ async def _do_rewind(rt: Runtime, pump) -> None:
     console.print(table)
     if pump is None:
         return
-    console.print("[yellow]rewind to # (enter to cancel) ›[/] ", end="")
+    # ⚠️ no end="" — the persistent bottom prompt owns the last visual
+    # row; a trailing partial line collides with it and the cursor lands
+    # mid-message. Print a proper line, let the user type below.
+    console.print("[yellow]rewind to # · pick a number, or enter to cancel[/]")
     pick = (await pump.queue.get() or "").strip()
     if not pick.isdigit() or not (1 <= int(pick) <= len(recent)):
         return
     target = recent[int(pick) - 1]
     console.print(
-        r"[yellow]restore what? \[b]oth · \[c]hat only · \[f]iles only ›[/] ",
-        end="",
+        r"[yellow]restore what? \[b]oth · \[c]hat only · \[f]iles only[/]"
     )
     scope_key = (await pump.queue.get() or "b").strip().lower()[:1]
     scope = {"b": "both", "c": "chat", "f": "files"}.get(scope_key, "both")
     messages, files_restored = restore(target.id, scope)
     if messages is not None:
         rt.messages = messages
+        # 🧹 A rewind is a state reset — clear the moving parts that would
+        # otherwise carry pre-rewind assumptions into the next turn:
+        # - context_tokens must reset or maybe_compact() thinks we're
+        #   still huge and fires against the tiny restored history
+        # - dangling tool_calls in an old checkpoint would 400 the next
+        #   request; the fixup makes the restored history self-consistent
+        # - queued/pending action flags should not survive a rewind
+        rt.context_tokens = 0
+        rt._close_dangling_tool_calls()
+        rt.inbox.clear()
+        rt._pending_verify = None
+        rt._pending_resume = None
         save_session(rt.session_id, rt.messages)
     bits = []
     if messages is not None:
@@ -1961,7 +2013,7 @@ async def _run_builtin(name: str, rt: Runtime, pump=None) -> None:
         )
         if pump is None:
             return
-        console.print("[yellow]switch to # (enter to keep current) ›[/] ", end="")
+        console.print("[yellow]switch to # · pick a number, or enter to keep current[/]")
         choice = await pump.queue.get()
         if choice and choice.strip().isdigit():
             n = int(choice.strip())
